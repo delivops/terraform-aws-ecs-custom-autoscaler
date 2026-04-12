@@ -78,7 +78,7 @@ http = {
   url     = "https://api.example.com/metrics"
   method  = "GET"
   headers = { "Authorization" = "Bearer xxx" }
-  jq_path = ".data.pending_count"
+  json_path = ".data.pending_count"
 }
 ```
 

@@ -2,8 +2,9 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  function_name = "ecs-autoscaler-${var.cluster_name}-${var.service_name}"
-  ssm_path      = "/ecs-autoscaler/${var.cluster_name}/${var.service_name}/state"
+  raw_function_name = "ecs-autoscaler-${var.cluster_name}-${var.service_name}"
+  function_name     = substr(local.raw_function_name, 0, min(64, length(local.raw_function_name)))
+  ssm_path          = "/ecs-autoscaler/${var.cluster_name}/${var.service_name}/state"
 
   source_config = (
     var.source_type == "redis" ? var.redis :
@@ -33,6 +34,12 @@ locals {
     local.source_config != null ? true :
     tobool("ERROR: ${var.source_type} configuration is required when source_type = '${var.source_type}'")
   )
+
+  # Validate min_replicas <= max_replicas
+  validate_min_max = (
+    var.min_replicas <= var.max_replicas ? true :
+    tobool("ERROR: min_replicas (${var.min_replicas}) must be <= max_replicas (${var.max_replicas})")
+  )
 }
 
 # --- Lambda Layer (Python dependencies) ---
@@ -43,7 +50,7 @@ resource "null_resource" "pip_install" {
   }
 
   provisioner "local-exec" {
-    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet"
+    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all:"
   }
 }
 
@@ -67,7 +74,7 @@ data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/lambda/function.zip"
-  excludes    = ["layer", "layer.zip", "function.zip", "requirements.txt"]
+  excludes    = ["layer", "layer.zip", "function.zip", "requirements.txt", "__pycache__", "*.pyc"]
 }
 
 # --- IAM ---
@@ -185,7 +192,7 @@ resource "aws_iam_role_policy" "sqs" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["sqs:GetQueueAttributes"]
-      Resource = "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", var.sqs.queue_url), length(split("/", var.sqs.queue_url)) - 1)}"
+      Resource = "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", try(var.sqs.queue_url, "")), length(split("/", try(var.sqs.queue_url, ""))) - 1)}"
     }]
   })
 }

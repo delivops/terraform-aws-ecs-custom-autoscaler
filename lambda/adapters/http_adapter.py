@@ -22,15 +22,15 @@ def read_metric(config):
         url: HTTP endpoint URL
         method: HTTP method (default: GET)
         headers: Optional dict of HTTP headers
-        jq_path: Dot-path to extract numeric value from JSON response (e.g., '.data.count')
+        json_path: Dot-path to extract numeric value from JSON response (e.g., '.data.count')
     """
     method = config.get("method", "GET")
     headers = config.get("headers", {})
-    jq_path = config.get("jq_path", ".value")
+    json_path = config.get("json_path", ".value")
 
     response = requests.request(method, config["url"], headers=headers, timeout=10)
     response.raise_for_status()
 
     data = response.json()
-    value = _extract_value(data, jq_path)
+    value = _extract_value(data, json_path)
     return float(value)

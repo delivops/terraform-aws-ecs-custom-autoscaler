@@ -57,13 +57,13 @@ variable "redis" {
 
 variable "http" {
   type = object({
-    url     = string
-    method  = optional(string, "GET")
-    headers = optional(map(string), {})
-    jq_path = optional(string, ".value")
+    url       = string
+    method    = optional(string, "GET")
+    headers   = optional(map(string), {})
+    json_path = optional(string, ".value")
   })
   default     = null
-  description = "HTTP source configuration. Required when source_type = 'http'."
+  description = "HTTP source configuration. Required when source_type = 'http'. json_path uses dot notation (e.g., '.data.count')."
 }
 
 variable "command" {
@@ -72,7 +72,7 @@ variable "command" {
     layer_arns = optional(list(string), [])
   })
   default     = null
-  description = "Command source configuration. Required when source_type = 'command'."
+  description = "Command source configuration. Required when source_type = 'command'. WARNING: script is executed via shell — only use trusted values."
 }
 
 variable "cloudwatch" {

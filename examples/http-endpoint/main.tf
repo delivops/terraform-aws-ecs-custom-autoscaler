@@ -16,7 +16,7 @@ module "worker_autoscaler" {
     url     = "https://internal-api.example.com/metrics/pending-jobs"
     method  = "GET"
     headers = { "Authorization" = "Bearer token-placeholder" }
-    jq_path = ".data.pending_count"
+    json_path = ".data.pending_count"
   }
 
   scale_out_steps = [

@@ -131,7 +131,11 @@ def handler(event, context):
     elif matched_step:
         reason = "Scale-out cooldown not expired"
 
-    # Reset breach counters for non-matching scale-out thresholds
+    # Reset breach counters for non-matching scale-out thresholds.
+    # Only the highest matching threshold accumulates breaches; lower
+    # thresholds are reset each evaluation. This means moderate-level
+    # scaling won't fire if the metric occasionally spikes past a
+    # higher threshold.
     for step in scale_out_steps:
         breach_key = f"out_{step['threshold']}"
         if not matched_step or step["threshold"] != matched_step["threshold"]:

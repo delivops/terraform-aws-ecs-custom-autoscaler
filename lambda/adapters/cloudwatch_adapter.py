@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 
@@ -27,8 +27,8 @@ def read_metric(config):
         Namespace=namespace,
         MetricName=metric_name,
         Dimensions=[{"Name": k, "Value": v} for k, v in dimensions.items()],
-        StartTime=now.timestamp() - (period * 3),
-        EndTime=now.timestamp(),
+        StartTime=now - timedelta(seconds=period * 3),
+        EndTime=now,
         Period=period,
         Statistics=[statistic],
     )

@@ -4,6 +4,10 @@ import subprocess
 def read_metric(config):
     """Read a numeric metric by running a shell command.
 
+    WARNING: The script value is executed as-is via shell=True.
+    Only use trusted input — the value comes from the Terraform
+    CONFIG env var, not from runtime user input.
+
     Config keys:
         script: Shell command to execute (stdout must be a number)
     """
