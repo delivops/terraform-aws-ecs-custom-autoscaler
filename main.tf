@@ -6,13 +6,13 @@ locals {
   function_name     = substr(local.raw_function_name, 0, min(64, length(local.raw_function_name)))
   ssm_path          = "/ecs-autoscaler/${var.cluster_name}/${var.service_name}/state"
 
-  source_config = (
-    var.source_type == "redis"      ? var.redis :
-    var.source_type == "bullmq"     ? var.bullmq :
-    var.source_type == "http"       ? var.http :
-    var.source_type == "command"    ? var.command :
-    var.source_type == "cloudwatch" ? var.cloudwatch :
-    var.source_type == "sqs"        ? var.sqs :
+  source_config_json = (
+    var.source_type == "redis"      ? jsonencode(var.redis) :
+    var.source_type == "bullmq"     ? jsonencode(var.bullmq) :
+    var.source_type == "http"       ? jsonencode(var.http) :
+    var.source_type == "command"    ? jsonencode(var.command) :
+    var.source_type == "cloudwatch" ? jsonencode(var.cloudwatch) :
+    var.source_type == "sqs"        ? jsonencode(var.sqs) :
     null
   )
 
@@ -20,7 +20,7 @@ locals {
     cluster_name       = var.cluster_name
     service_name       = var.service_name
     source_type        = var.source_type
-    source_config      = local.source_config
+    source_config      = jsondecode(local.source_config_json)
     min_replicas       = var.min_replicas
     max_replicas       = var.max_replicas
     scale_out_steps    = var.scale_out_steps
@@ -32,7 +32,7 @@ locals {
 
   # Validate source config is provided for the selected source_type
   validate_source_config = (
-    local.source_config != null ? true :
+    local.source_config_json != null ? true :
     tobool("ERROR: ${var.source_type} configuration is required when source_type = '${var.source_type}'")
   )
 
