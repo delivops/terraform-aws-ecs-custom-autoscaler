@@ -1,3 +1,5 @@
+[![DelivOps banner](https://raw.githubusercontent.com/delivops/.github/main/images/banner.png?raw=true)](https://delivops.com)
+
 # terraform-aws-ecs-custom-autoscaler
 
 A Terraform module that creates a Lambda-based ECS autoscaler for metrics that live outside the built-in AppAutoScaling options — Redis queue depth, HTTP endpoint values, CloudWatch custom metrics, or any shell command.
