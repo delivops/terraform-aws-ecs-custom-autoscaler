@@ -48,11 +48,19 @@ variable "source_type" {
 variable "redis" {
   type = object({
     url     = string
-    key     = string
+    key     = optional(string)
+    keys    = optional(list(string))
     command = optional(string, "LLEN")
   })
   default     = null
   description = "Redis source configuration. Required when source_type = 'redis'."
+
+  validation {
+    condition = var.redis == null || (
+      (var.redis.key != null ? 1 : 0) + (var.redis.keys != null ? 1 : 0) == 1
+    )
+    error_message = "Exactly one of 'key' or 'keys' must be set in the redis configuration."
+  }
 }
 
 variable "http" {

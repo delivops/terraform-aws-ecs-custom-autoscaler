@@ -68,6 +68,23 @@ redis = {
 }
 ```
 
+#### Multi-key (e.g. BullMQ queues)
+
+Use `keys` to sum metrics across multiple Redis keys:
+
+```hcl
+source_type = "redis"
+redis = {
+  url  = "redis://my-redis:6379/0"
+  keys = [
+    "bull:myqueue:wait",
+    "bull:myqueue:active",
+    "bull:myqueue:delayed",
+  ]
+  command = "LLEN"
+}
+```
+
 ### HTTP
 
 Makes an HTTP request and extracts a numeric value from the JSON response using a dot-path expression.

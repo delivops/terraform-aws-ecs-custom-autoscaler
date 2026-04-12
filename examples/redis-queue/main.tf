@@ -13,8 +13,12 @@ module "queue_autoscaler" {
 
   source_type = "redis"
   redis = {
-    url     = "redis://my-redis.example.cache.amazonaws.com:6379/0"
-    key     = "myapp:jobs:pending"
+    url = "redis://my-redis.example.cache.amazonaws.com:6379/0"
+    keys = [
+      "bull:jobs:wait",
+      "bull:jobs:active",
+      "bull:jobs:delayed",
+    ]
     command = "LLEN"
   }
 
