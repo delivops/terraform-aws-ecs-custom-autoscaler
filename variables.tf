@@ -56,8 +56,9 @@ variable "redis" {
   description = "Redis source configuration. Required when source_type = 'redis'. Use command = 'AUTO' to auto-detect key types (recommended for mixed key types like BullMQ)."
 
   validation {
-    condition = var.redis == null || (
-      (var.redis.key != null ? 1 : 0) + (var.redis.keys != null ? 1 : 0) == 1
+    condition = var.redis == null || try(
+      (var.redis.key != null ? 1 : 0) + (var.redis.keys != null ? 1 : 0) == 1,
+      false
     )
     error_message = "Exactly one of 'key' or 'keys' must be set in the redis configuration."
   }
