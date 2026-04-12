@@ -121,12 +121,12 @@ variable "scale_out_steps" {
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.change == null || s.change > 0])
+    condition     = alltrue([for s in var.scale_out_steps : s.change == null ? true : s.change > 0])
     error_message = "All scale_out_steps with 'change' must have change > 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.exact == null || s.exact > 0])
+    condition     = alltrue([for s in var.scale_out_steps : s.exact == null ? true : s.exact > 0])
     error_message = "All scale_out_steps with 'exact' must have exact > 0."
   }
 
@@ -157,12 +157,12 @@ variable "scale_in_steps" {
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_in_steps : s.change == null || s.change < 0])
+    condition     = alltrue([for s in var.scale_in_steps : s.change == null ? true : s.change < 0])
     error_message = "All scale_in_steps with 'change' must have change < 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_in_steps : s.exact == null || s.exact >= 0])
+    condition     = alltrue([for s in var.scale_in_steps : s.exact == null ? true : s.exact >= 0])
     error_message = "All scale_in_steps with 'exact' must have exact >= 0."
   }
 
