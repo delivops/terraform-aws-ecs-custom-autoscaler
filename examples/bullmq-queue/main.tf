@@ -11,18 +11,17 @@ module "queue_autoscaler" {
   max_replicas = 10
   schedule     = "rate(1 minute)"
 
-  source_type = "redis"
-  redis = {
-    url     = "redis://my-redis.example.cache.amazonaws.com:6379/0"
-    key     = "myapp:jobs:pending"
-    command = "LLEN"
+  source_type = "bullmq"
+  bullmq = {
+    url        = "redis://my-redis.example.cache.amazonaws.com:6379/0"
+    queue_name = "my-jobs"
   }
 
   scale_out_steps = [
     { threshold = 5, change = 1 },
     { threshold = 10, change = 2 },
     { threshold = 20, change = 3 },
-    { threshold = 50, exact = 10 },  # emergency: jump to max capacity
+    { threshold = 50, exact = 10 },
   ]
 
   scale_in_steps = [
@@ -30,15 +29,8 @@ module "queue_autoscaler" {
     { threshold = 0, exact = 0, consecutive_breaches = 5 },
   ]
 
-  scale_in_cooldown = 600
-
   vpc_config = {
     subnet_ids         = ["subnet-abc123", "subnet-def456"]
     security_group_ids = ["sg-abc123"]
-  }
-
-  tags = {
-    Environment = "prod"
-    Team        = "platform"
   }
 }

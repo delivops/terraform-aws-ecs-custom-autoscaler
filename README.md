@@ -57,7 +57,9 @@ module "queue_autoscaler" {
 
 ### Redis
 
-Connects to Redis and runs a command on a key. Supports `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`.
+Connects to Redis and runs a command on a key. Supports `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`, `AUTO`.
+
+Use `command = "AUTO"` to auto-detect the Redis data type of each key and use the appropriate command (e.g., `LLEN` for lists, `ZCARD` for sorted sets). This is recommended when querying keys with mixed data types.
 
 ```hcl
 source_type = "redis"
@@ -68,22 +70,46 @@ redis = {
 }
 ```
 
-#### Multi-key (e.g. BullMQ queues)
+#### Multi-key
 
-Use `keys` to sum metrics across multiple Redis keys:
+Use `keys` to sum metrics across multiple Redis keys. Use `command = "AUTO"` when keys have mixed data types (lists, sorted sets, etc.):
 
 ```hcl
 source_type = "redis"
 redis = {
   url  = "redis://my-redis:6379/0"
   keys = [
-    "bull:myqueue:wait",
-    "bull:myqueue:active",
-    "bull:myqueue:delayed",
+    "myapp:queue:pending",
+    "myapp:queue:retry",
   ]
   command = "LLEN"
 }
 ```
+
+### BullMQ
+
+Dedicated source type for [BullMQ](https://docs.bullmq.io/) queues. Automatically constructs the correct Redis keys and uses the right command per key type (`LLEN` for lists like `wait`/`active`, `ZCARD` for sorted sets like `delayed`).
+
+```hcl
+source_type = "bullmq"
+bullmq = {
+  url        = "redis://my-redis:6379/0"
+  queue_name = "my-jobs"
+}
+```
+
+By default, it sums `wait`, `active`, and `delayed` states. You can customize which states to include and the key prefix:
+
+```hcl
+bullmq = {
+  url        = "redis://my-redis:6379/0"
+  queue_name = "my-jobs"
+  prefix     = "bull"                                     # default
+  include    = ["wait", "active", "delayed", "paused"]    # default: ["wait", "active", "delayed"]
+}
+```
+
+Supported states: `wait`, `active`, `delayed`, `paused` (lists), `completed`, `failed` (sorted sets).
 
 ### HTTP
 
@@ -176,7 +202,7 @@ After a scaling action occurs, further actions of the same type are suppressed f
 
 ### How It Works
 
-1. **Read metric** from the configured source (redis/http/cloudwatch/sqs/command)
+1. **Read metric** from the configured source (redis/bullmq/http/cloudwatch/sqs/command)
 2. **Describe ECS service** to get current desired count
 3. **Read state** from SSM Parameter Store (cooldown timestamps + breach counters)
 4. **Evaluate**:
@@ -211,8 +237,9 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `min_replicas` | `number` | `0` | Minimum task count |
 | `max_replicas` | `number` | - | Maximum task count |
 | `schedule` | `string` | `"rate(1 minute)"` | EventBridge rate expression |
-| `source_type` | `string` | - | `"redis"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
+| `source_type` | `string` | - | `"redis"`, `"bullmq"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
 | `redis` | `object` | `null` | Redis source config |
+| `bullmq` | `object` | `null` | BullMQ source config |
 | `http` | `object` | `null` | HTTP source config |
 | `cloudwatch` | `object` | `null` | CloudWatch metric source config |
 | `sqs` | `object` | `null` | SQS source config |
