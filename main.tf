@@ -47,11 +47,12 @@ locals {
 
 resource "null_resource" "pip_install" {
   triggers = {
-    requirements = filemd5("${path.module}/lambda/requirements.txt")
+    requirements    = filemd5("${path.module}/lambda/requirements.txt")
+    layer_installed = fileexists("${path.module}/lambda/layer/python/.installed") ? filemd5("${path.module}/lambda/layer/python/.installed") : "not_installed"
   }
 
   provisioner "local-exec" {
-    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.12"
+    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.12 && date > ${path.module}/lambda/layer/python/.installed"
   }
 }
 
