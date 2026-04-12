@@ -69,6 +69,15 @@ def _evaluate_scale_out(metric_value, steps):
     return None
 
 
+def _evaluate_scale_in(metric_value, steps):
+    """Find the lowest matching threshold. Steps evaluated lowest-first."""
+    sorted_steps = sorted(steps, key=lambda s: s["threshold"])
+    for step in sorted_steps:
+        if metric_value <= step["threshold"]:
+            return step
+    return None
+
+
 def handler(event, context):
     config = json.loads(os.environ["CONFIG"])
 
@@ -79,7 +88,7 @@ def handler(event, context):
     min_replicas = config["min_replicas"]
     max_replicas = config["max_replicas"]
     scale_out_steps = config["scale_out_steps"]
-    scale_in = config["scale_in"]
+    scale_in_steps = config["scale_in_steps"]
     scale_out_cooldown = config["scale_out_cooldown"]
     scale_in_cooldown = config["scale_in_cooldown"]
     ssm_path = config["ssm_path"]
@@ -151,36 +160,48 @@ def handler(event, context):
                 state_changed = True
 
     # Check scale-in (only if no scale-out matched)
-    if matched_step is None and metric_value <= scale_in["threshold"]:
+    matched_in_step = None if matched_step is not None else _evaluate_scale_in(metric_value, scale_in_steps)
+    if matched_in_step is not None:
         if _cooldown_expired(state, "last_scale_in", scale_in_cooldown):
-            required = scale_in.get("consecutive_breaches", 3)
-            current_breaches = breach_counts.get("in", 0) + 1
-            breach_counts["in"] = current_breaches
+            required = matched_in_step.get("consecutive_breaches", 3)
+            breach_key = f"in_{matched_in_step['threshold']}"
+            current_breaches = breach_counts.get(breach_key, 0) + 1
+            breach_counts[breach_key] = current_breaches
             state_changed = True
 
             if current_breaches >= required:
-                new_desired = max(current_desired + scale_in["change"], min_replicas)
+                if matched_in_step.get("exact") is not None:
+                    new_desired = matched_in_step["exact"]
+                else:
+                    new_desired = max(current_desired + matched_in_step["change"], min_replicas)
                 if new_desired != current_desired:
                     action = "scale_in"
+                    if matched_in_step.get("exact") is not None:
+                        change_desc = f"exact={matched_in_step['exact']}"
+                    else:
+                        change_desc = str(matched_in_step["change"])
                     reason = (
-                        f"metric {metric_value} <= threshold {scale_in['threshold']} "
-                        f"for {current_breaches}/{required} checks, {scale_in['change']}"
+                        f"metric {metric_value} <= threshold {matched_in_step['threshold']} "
+                        f"for {current_breaches}/{required} checks, {change_desc}"
                     )
-                    breach_counts["in"] = 0
+                    breach_counts[breach_key] = 0
                 else:
                     reason = f"Already at min_replicas ({min_replicas})"
             else:
                 reason = (
-                    f"metric {metric_value} <= threshold {scale_in['threshold']} "
+                    f"metric {metric_value} <= threshold {matched_in_step['threshold']} "
                     f"({current_breaches}/{required} breaches, waiting)"
                 )
         else:
             reason = "Scale-in cooldown not expired"
-    elif matched_step is not None or metric_value > scale_in["threshold"]:
-        # Metric is above scale-in threshold — reset scale-in breach counter
-        if breach_counts.get("in", 0) > 0:
-            breach_counts["in"] = 0
-            state_changed = True
+
+    # Reset breach counters for non-matching scale-in thresholds
+    for step in scale_in_steps:
+        breach_key = f"in_{step['threshold']}"
+        if not matched_in_step or step["threshold"] != matched_in_step["threshold"]:
+            if breach_counts.get(breach_key, 0) > 0:
+                breach_counts[breach_key] = 0
+                state_changed = True
 
     # 5. Apply scaling + persist state
     if action in ("scale_out", "scale_in"):

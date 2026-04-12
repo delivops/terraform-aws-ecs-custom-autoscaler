@@ -39,10 +39,10 @@ module "queue_autoscaler" {
     { threshold = 50,  change = 10 },
   ]
 
-  scale_in = {
-    threshold = 0
-    change    = -1
-  }
+  scale_in_steps = [
+    { threshold = 5, change = -1 },
+    { threshold = 0, exact = 0, consecutive_breaches = 5 },
+  ]
 
   scale_in_cooldown = 600
 
@@ -141,13 +141,17 @@ command = {
 
 ### Step evaluation
 
-Scale-out steps are sorted by threshold descending; the highest matching threshold wins. For example, if metric = 75 and steps have thresholds at 5, 10, 20, 50 — the `threshold = 50` step fires.
+Both scale-out and scale-in support multi-step thresholds with `change` (relative) or `exact` (absolute) capacity.
 
-Each step must set either `change` (add N tasks to the current count) or `exact` (set the desired count to exactly N tasks). Use `exact` for emergency scenarios where you want to jump to a specific capacity regardless of the current count.
+**Scale-out**: steps are sorted by threshold descending; the **highest** matching threshold wins. For example, if metric = 75 and steps have thresholds at 5, 10, 20, 50 — the `threshold = 50` step fires.
+
+**Scale-in**: steps are sorted by threshold ascending; the **lowest** matching threshold wins. For example, if metric = 0 and steps have thresholds at 0, 5 — the `threshold = 0` step fires (most aggressive). If metric = 3, the `threshold = 5` step fires (gentler).
+
+Each step must set either `change` (adjust by N tasks) or `exact` (set desired count to exactly N tasks). Use `exact` for scenarios like scaling to zero when idle or jumping to a specific capacity.
 
 ### Consecutive breaches (`consecutive_breaches`)
 
-Similar to CloudWatch alarm `evaluation_periods`, each step and the scale-in rule support `consecutive_breaches` — the metric must breach the threshold for N consecutive evaluations before scaling triggers.
+Similar to CloudWatch alarm `evaluation_periods`, each step supports `consecutive_breaches` — the metric must breach the threshold for N consecutive evaluations before scaling triggers.
 
 ```hcl
 scale_out_steps = [
@@ -156,16 +160,15 @@ scale_out_steps = [
   { threshold = 100, exact = 10 },                            # jump to exactly 10 tasks
 ]
 
-scale_in = {
-  threshold            = 0
-  change               = -1
-  consecutive_breaches = 3   # must be at 0 for 3 consecutive checks before scaling in
-}
+scale_in_steps = [
+  { threshold = 5, change = -1 },                              # gentle: remove 1 task
+  { threshold = 0, exact = 0, consecutive_breaches = 5 },      # aggressive: scale to zero
+]
 ```
 
-**Defaults**: scale-out = `1` (react fast), scale-in = `3` (conservative). This mirrors the asymmetric behavior of built-in ECS autoscaling — aggressive scale-out, cautious scale-in.
+**Defaults**: scale-out `consecutive_breaches` = `1` (react fast), scale-in = `3` (conservative). This mirrors the asymmetric behavior of built-in ECS autoscaling — aggressive scale-out, cautious scale-in.
 
-Breach counters are tracked in SSM alongside cooldown timestamps. If the metric drops below a scale-out threshold before reaching the required breaches, the counter resets. Same for scale-in if the metric rises above the threshold.
+Breach counters are tracked per threshold in SSM alongside cooldown timestamps. If the metric moves away from a threshold before reaching the required breaches, the counter resets.
 
 ### Cooldowns
 
@@ -179,7 +182,7 @@ After a scaling action occurs, further actions of the same type are suppressed f
 4. **Evaluate**:
    - Find the highest matching scale-out threshold
    - If matched AND cooldown expired: increment breach counter; if breaches >= `consecutive_breaches`, scale out
-   - If no scale-out match AND metric <= scale_in threshold AND cooldown expired: increment scale-in breach counter; if breaches >= `consecutive_breaches`, scale in
+   - If no scale-out match: find the lowest matching scale-in threshold; if matched AND cooldown expired: increment breach counter; if breaches >= `consecutive_breaches`, scale in
    - Reset breach counters for conditions no longer met
 5. **Update ECS service** and persist new state to SSM
 6. **Log** structured JSON with the decision (including breach counts)
@@ -215,7 +218,7 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `sqs` | `object` | `null` | SQS source config |
 | `command` | `object` | `null` | Command source config |
 | `scale_out_steps` | `list(object)` | - | Step ladder (threshold + change) |
-| `scale_in` | `object` | `{threshold=0, change=-1}` | Scale-in trigger |
+| `scale_in_steps` | `list(object)` | `[{threshold=0, change=-1}]` | Scale-in step ladder (threshold + change/exact) |
 | `scale_out_cooldown` | `number` | `60` | Seconds between scale-out actions |
 | `scale_in_cooldown` | `number` | `600` | Seconds between scale-in actions |
 | `vpc_config` | `object` | `null` | VPC subnet and security group IDs |
@@ -312,7 +315,7 @@ No modules.
 | <a name="input_max_replicas"></a> [max\_replicas](#input\_max\_replicas) | Maximum task count | `number` | n/a | yes |
 | <a name="input_min_replicas"></a> [min\_replicas](#input\_min\_replicas) | Minimum task count (can be 0) | `number` | `0` | no |
 | <a name="input_redis"></a> [redis](#input\_redis) | Redis source configuration. Required when source\_type = 'redis'. | <pre>object({<br/>    url     = string<br/>    key     = optional(string)<br/>    keys    = optional(list(string))<br/>    command = optional(string, "LLEN")<br/>  })</pre> | `null` | no |
-| <a name="input_scale_in"></a> [scale\_in](#input\_scale\_in) | Scale-in trigger. When metric <= threshold for consecutive\_breaches evaluations, adjust by change. Default consecutive\_breaches = 3 (conservative). | <pre>object({<br/>    threshold            = number<br/>    change               = number<br/>    consecutive_breaches = optional(number, 3)<br/>  })</pre> | <pre>{<br/>  "change": -1,<br/>  "consecutive_breaches": 3,<br/>  "threshold": 0<br/>}</pre> | no |
+| <a name="input_scale_in_steps"></a> [scale\_in\_steps](#input\_scale\_in\_steps) | Scale-in step ladder. Lowest matching threshold wins. Each step fires when metric <= threshold. Set either 'change' (relative, must be negative) or 'exact' (set to exactly N tasks, e.g. 0). Default consecutive\_breaches = 3 (conservative). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 3)<br/>  }))</pre> | <pre>[{<br/>  "change": -1,<br/>  "consecutive_breaches": 3,<br/>  "threshold": 0<br/>}]</pre> | no |
 | <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
 | <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |
 | <a name="input_scale_out_steps"></a> [scale\_out\_steps](#input\_scale\_out\_steps) | Scale-out step ladder. Highest matching threshold wins. Each step must set either 'change' (relative +N) or 'exact' (set to exactly N tasks). consecutive\_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | n/a | yes |

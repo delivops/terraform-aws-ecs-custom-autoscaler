@@ -136,27 +136,39 @@ variable "scale_out_steps" {
   }
 }
 
-variable "scale_in" {
-  type = object({
+variable "scale_in_steps" {
+  type = list(object({
     threshold            = number
-    change               = number
+    change               = optional(number)
+    exact                = optional(number)
     consecutive_breaches = optional(number, 3)
-  })
-  description = "Scale-in trigger. When metric <= threshold for consecutive_breaches evaluations, adjust by change. Default consecutive_breaches = 3 (conservative)."
-  default = {
-    threshold            = 0
-    change               = -1
-    consecutive_breaches = 3
+  }))
+  description = "Scale-in step ladder. Lowest matching threshold wins. Each step fires when metric <= threshold. Set either 'change' (relative, must be negative) or 'exact' (set to exactly N tasks, e.g. 0). Default consecutive_breaches = 3 (conservative)."
+  default = [
+    { threshold = 0, change = -1, consecutive_breaches = 3 }
+  ]
+
+  validation {
+    condition = alltrue([
+      for s in var.scale_in_steps :
+      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+    ])
+    error_message = "Each scale_in_step must set exactly one of 'change' or 'exact'."
   }
 
   validation {
-    condition     = var.scale_in.change < 0
-    error_message = "scale_in.change must be < 0."
+    condition     = alltrue([for s in var.scale_in_steps : s.change == null || s.change < 0])
+    error_message = "All scale_in_steps with 'change' must have change < 0."
   }
 
   validation {
-    condition     = var.scale_in.consecutive_breaches > 0
-    error_message = "scale_in.consecutive_breaches must be > 0."
+    condition     = alltrue([for s in var.scale_in_steps : s.exact == null || s.exact >= 0])
+    error_message = "All scale_in_steps with 'exact' must have exact >= 0."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.scale_in_steps : s.consecutive_breaches > 0])
+    error_message = "All scale_in_steps must have consecutive_breaches > 0."
   }
 }
 
