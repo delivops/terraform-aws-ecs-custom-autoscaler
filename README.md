@@ -143,6 +143,8 @@ command = {
 
 Scale-out steps are sorted by threshold descending; the highest matching threshold wins. For example, if metric = 75 and steps have thresholds at 5, 10, 20, 50 — the `threshold = 50` step fires.
 
+Each step must set either `change` (add N tasks to the current count) or `exact` (set the desired count to exactly N tasks). Use `exact` for emergency scenarios where you want to jump to a specific capacity regardless of the current count.
+
 ### Consecutive breaches (`consecutive_breaches`)
 
 Similar to CloudWatch alarm `evaluation_periods`, each step and the scale-in rule support `consecutive_breaches` — the metric must breach the threshold for N consecutive evaluations before scaling triggers.
@@ -151,6 +153,7 @@ Similar to CloudWatch alarm `evaluation_periods`, each step and the scale-in rul
 scale_out_steps = [
   { threshold = 5,  change = 1, consecutive_breaches = 1 },  # react immediately
   { threshold = 50, change = 10 },                            # default: 1 (immediate)
+  { threshold = 100, exact = 10 },                            # jump to exactly 10 tasks
 ]
 
 scale_in = {
@@ -312,7 +315,7 @@ No modules.
 | <a name="input_scale_in"></a> [scale\_in](#input\_scale\_in) | Scale-in trigger. When metric <= threshold for consecutive\_breaches evaluations, adjust by change. Default consecutive\_breaches = 3 (conservative). | <pre>object({<br/>    threshold            = number<br/>    change               = number<br/>    consecutive_breaches = optional(number, 3)<br/>  })</pre> | <pre>{<br/>  "change": -1,<br/>  "consecutive_breaches": 3,<br/>  "threshold": 0<br/>}</pre> | no |
 | <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
 | <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |
-| <a name="input_scale_out_steps"></a> [scale\_out\_steps](#input\_scale\_out\_steps) | Scale-out step ladder. Highest matching threshold wins. consecutive\_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately). | <pre>list(object({<br/>    threshold            = number<br/>    change               = number<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | n/a | yes |
+| <a name="input_scale_out_steps"></a> [scale\_out\_steps](#input\_scale\_out\_steps) | Scale-out step ladder. Highest matching threshold wins. Each step must set either 'change' (relative +N) or 'exact' (set to exactly N tasks). consecutive\_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | n/a | yes |
 | <a name="input_schedule"></a> [schedule](#input\_schedule) | EventBridge rate expression (e.g., 'rate(1 minute)', 'rate(5 minutes)') | `string` | `"rate(1 minute)"` | no |
 | <a name="input_service_name"></a> [service\_name](#input\_service\_name) | ECS service name | `string` | n/a | yes |
 | <a name="input_source_type"></a> [source\_type](#input\_source\_type) | Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command' | `string` | n/a | yes |
