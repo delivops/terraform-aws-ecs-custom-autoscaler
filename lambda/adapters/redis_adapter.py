@@ -23,7 +23,8 @@ def read_metric(config):
 
     Config keys:
         url: Redis connection URL
-        key: Redis key to query
+        key: single Redis key to query
+        keys: list of Redis keys to query (results are summed)
         command: Redis command (LLEN, GET, ZCARD, SCARD, HLEN)
     """
     command = config.get("command", "LLEN").upper()
@@ -31,5 +32,6 @@ def read_metric(config):
         raise ValueError(f"Unsupported Redis command: {command}. Supported: {SUPPORTED_COMMANDS}")
 
     client = _get_client(config["url"])
-    result = getattr(client, command.lower())(config["key"])
-    return float(result)
+    keys = config.get("keys") or [config["key"]]
+    cmd_fn = getattr(client, command.lower())
+    return sum(float(cmd_fn(k)) for k in keys)
