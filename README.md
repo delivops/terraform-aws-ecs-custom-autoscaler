@@ -57,7 +57,9 @@ module "queue_autoscaler" {
 
 ### Redis
 
-Connects to Redis and runs a command on a key. Supports `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`.
+Connects to Redis and runs a command on a key. Supports `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`, `AUTO`.
+
+Use `command = "AUTO"` to auto-detect the Redis data type of each key and use the appropriate command (e.g., `LLEN` for lists, `ZCARD` for sorted sets). This is recommended when querying keys with mixed data types.
 
 ```hcl
 source_type = "redis"
@@ -68,22 +70,46 @@ redis = {
 }
 ```
 
-#### Multi-key (e.g. BullMQ queues)
+#### Multi-key
 
-Use `keys` to sum metrics across multiple Redis keys:
+Use `keys` to sum metrics across multiple Redis keys. Use `command = "AUTO"` when keys have mixed data types (lists, sorted sets, etc.):
 
 ```hcl
 source_type = "redis"
 redis = {
   url  = "redis://my-redis:6379/0"
   keys = [
-    "bull:myqueue:wait",
-    "bull:myqueue:active",
-    "bull:myqueue:delayed",
+    "myapp:queue:pending",
+    "myapp:queue:retry",
   ]
   command = "LLEN"
 }
 ```
+
+### BullMQ
+
+Dedicated source type for [BullMQ](https://docs.bullmq.io/) queues. Automatically constructs the correct Redis keys and uses the right command per key type (`LLEN` for lists like `wait`/`active`, `ZCARD` for sorted sets like `delayed`).
+
+```hcl
+source_type = "bullmq"
+bullmq = {
+  url        = "redis://my-redis:6379/0"
+  queue_name = "my-jobs"
+}
+```
+
+By default, it sums `wait`, `active`, and `delayed` states. You can customize which states to include and the key prefix:
+
+```hcl
+bullmq = {
+  url        = "redis://my-redis:6379/0"
+  queue_name = "my-jobs"
+  prefix     = "bull"                                     # default
+  include    = ["wait", "active", "delayed", "paused"]    # default: ["wait", "active", "delayed"]
+}
+```
+
+Supported states: `wait`, `active`, `delayed`, `paused` (lists), `completed`, `failed` (sorted sets).
 
 ### HTTP
 
@@ -176,7 +202,7 @@ After a scaling action occurs, further actions of the same type are suppressed f
 
 ### How It Works
 
-1. **Read metric** from the configured source (redis/http/cloudwatch/sqs/command)
+1. **Read metric** from the configured source (redis/bullmq/http/cloudwatch/sqs/command)
 2. **Describe ECS service** to get current desired count
 3. **Read state** from SSM Parameter Store (cooldown timestamps + breach counters)
 4. **Evaluate**:
@@ -211,8 +237,9 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `min_replicas` | `number` | `0` | Minimum task count |
 | `max_replicas` | `number` | - | Maximum task count |
 | `schedule` | `string` | `"rate(1 minute)"` | EventBridge rate expression |
-| `source_type` | `string` | - | `"redis"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
+| `source_type` | `string` | - | `"redis"`, `"bullmq"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
 | `redis` | `object` | `null` | Redis source config |
+| `bullmq` | `object` | `null` | BullMQ source config |
 | `http` | `object` | `null` | HTTP source config |
 | `cloudwatch` | `object` | `null` | CloudWatch metric source config |
 | `sqs` | `object` | `null` | SQS source config |
@@ -305,6 +332,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
+| <a name="input_bullmq"></a> [bullmq](#input\_bullmq) | BullMQ source configuration. Required when source\_type = 'bullmq'. Automatically uses the correct Redis command per key type (LLEN for lists, ZCARD for sorted sets). | <pre>object({<br/>    url        = string<br/>    queue_name = string<br/>    prefix     = optional(string, "bull")<br/>    include    = optional(list(string), ["wait", "active", "delayed"])<br/>  })</pre> | `null` | no |
 | <a name="input_cloudwatch"></a> [cloudwatch](#input\_cloudwatch) | CloudWatch metric source configuration. Required when source\_type = 'cloudwatch'. | <pre>object({<br/>    namespace   = string<br/>    metric_name = string<br/>    dimensions  = optional(map(string), {})<br/>    statistic   = optional(string, "Average")<br/>    period      = optional(number, 60)<br/>  })</pre> | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | ECS cluster name | `string` | n/a | yes |
 | <a name="input_command"></a> [command](#input\_command) | Command source configuration. Required when source\_type = 'command'. WARNING: script is executed via shell — only use trusted values. | <pre>object({<br/>    script     = string<br/>    layer_arns = optional(list(string), [])<br/>  })</pre> | `null` | no |
@@ -314,7 +342,7 @@ No modules.
 | <a name="input_log_retention"></a> [log\_retention](#input\_log\_retention) | CloudWatch log retention in days | `number` | `14` | no |
 | <a name="input_max_replicas"></a> [max\_replicas](#input\_max\_replicas) | Maximum task count | `number` | n/a | yes |
 | <a name="input_min_replicas"></a> [min\_replicas](#input\_min\_replicas) | Minimum task count (can be 0) | `number` | `0` | no |
-| <a name="input_redis"></a> [redis](#input\_redis) | Redis source configuration. Required when source\_type = 'redis'. | <pre>object({<br/>    url     = string<br/>    key     = optional(string)<br/>    keys    = optional(list(string))<br/>    command = optional(string, "LLEN")<br/>  })</pre> | `null` | no |
+| <a name="input_redis"></a> [redis](#input\_redis) | Redis source configuration. Required when source\_type = 'redis'. Use command = 'AUTO' to auto-detect key types (recommended for mixed key types like BullMQ). | <pre>object({<br/>    url     = string<br/>    key     = optional(string)<br/>    keys    = optional(list(string))<br/>    command = optional(string, "LLEN")<br/>  })</pre> | `null` | no |
 | <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
 | <a name="input_scale_in_steps"></a> [scale\_in\_steps](#input\_scale\_in\_steps) | Scale-in step ladder. Lowest matching threshold wins. Each step fires when metric <= threshold. Set either 'change' (relative, must be negative) or 'exact' (set to exactly N tasks, e.g. 0). Default consecutive\_breaches = 3 (conservative). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 3)<br/>  }))</pre> | <pre>[<br/>  {<br/>    "change": -1,<br/>    "consecutive_breaches": 3,<br/>    "threshold": 0<br/>  }<br/>]</pre> | no |
 | <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |

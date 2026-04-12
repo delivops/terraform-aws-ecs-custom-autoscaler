@@ -40,8 +40,8 @@ variable "source_type" {
   description = "Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command'"
 
   validation {
-    condition     = contains(["redis", "http", "cloudwatch", "sqs", "command"], var.source_type)
-    error_message = "source_type must be 'redis', 'http', 'cloudwatch', 'sqs', or 'command'."
+    condition     = contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "command"], var.source_type)
+    error_message = "source_type must be 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', or 'command'."
   }
 }
 
@@ -53,7 +53,7 @@ variable "redis" {
     command = optional(string, "LLEN")
   })
   default     = null
-  description = "Redis source configuration. Required when source_type = 'redis'."
+  description = "Redis source configuration. Required when source_type = 'redis'. Use command = 'AUTO' to auto-detect key types (recommended for mixed key types like BullMQ)."
 
   validation {
     condition = var.redis == null || (
@@ -61,6 +61,17 @@ variable "redis" {
     )
     error_message = "Exactly one of 'key' or 'keys' must be set in the redis configuration."
   }
+}
+
+variable "bullmq" {
+  type = object({
+    url        = string
+    queue_name = string
+    prefix     = optional(string, "bull")
+    include    = optional(list(string), ["wait", "active", "delayed"])
+  })
+  default     = null
+  description = "BullMQ source configuration. Required when source_type = 'bullmq'. Automatically uses the correct Redis command per key type (LLEN for lists, ZCARD for sorted sets)."
 }
 
 variable "http" {

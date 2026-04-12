@@ -1,6 +1,14 @@
 import redis as redis_lib
 
-SUPPORTED_COMMANDS = {"LLEN", "GET", "ZCARD", "SCARD", "HLEN"}
+SUPPORTED_COMMANDS = {"LLEN", "GET", "ZCARD", "SCARD", "HLEN", "AUTO"}
+
+TYPE_TO_COMMAND = {
+    "list": "llen",
+    "zset": "zcard",
+    "set": "scard",
+    "hash": "hlen",
+    "string": "get",
+}
 
 # Module-level client cache — reused across warm invocations
 _client = None
@@ -33,5 +41,20 @@ def read_metric(config):
 
     client = _get_client(config["url"])
     keys = config.get("keys") or [config["key"]]
+
+    if command == "AUTO":
+        total = 0.0
+        for k in keys:
+            key_type = client.type(k)
+            if isinstance(key_type, bytes):
+                key_type = key_type.decode()
+            cmd_name = TYPE_TO_COMMAND.get(key_type)
+            if cmd_name is None:
+                if key_type == "none":
+                    continue
+                raise ValueError(f"Unsupported Redis type '{key_type}' for key '{k}'")
+            total += float(getattr(client, cmd_name)(k))
+        return total
+
     cmd_fn = getattr(client, command.lower())
     return sum(float(cmd_fn(k)) for k in keys)
