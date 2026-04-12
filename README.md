@@ -143,6 +143,8 @@ command = {
 
 Scale-out steps are sorted by threshold descending; the highest matching threshold wins. For example, if metric = 75 and steps have thresholds at 5, 10, 20, 50 — the `threshold = 50` step fires.
 
+Each step must set either `change` (add N tasks to the current count) or `exact` (set the desired count to exactly N tasks). Use `exact` for emergency scenarios where you want to jump to a specific capacity regardless of the current count.
+
 ### Consecutive breaches (`consecutive_breaches`)
 
 Similar to CloudWatch alarm `evaluation_periods`, each step and the scale-in rule support `consecutive_breaches` — the metric must breach the threshold for N consecutive evaluations before scaling triggers.
@@ -151,6 +153,7 @@ Similar to CloudWatch alarm `evaluation_periods`, each step and the scale-in rul
 scale_out_steps = [
   { threshold = 5,  change = 1, consecutive_breaches = 1 },  # react immediately
   { threshold = 50, change = 10 },                            # default: 1 (immediate)
+  { threshold = 100, exact = 10 },                            # jump to exactly 10 tasks
 ]
 
 scale_in = {

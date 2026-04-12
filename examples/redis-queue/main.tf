@@ -26,7 +26,7 @@ module "queue_autoscaler" {
     { threshold = 5, change = 1 },
     { threshold = 10, change = 2 },
     { threshold = 20, change = 3 },
-    { threshold = 50, change = 10 },
+    { threshold = 50, exact = 10 },  # emergency: jump to max capacity
   ]
 
   scale_in = {

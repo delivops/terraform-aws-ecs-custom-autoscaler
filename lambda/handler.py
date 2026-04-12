@@ -113,12 +113,19 @@ def handler(event, context):
         state_changed = True
 
         if current_breaches >= required:
-            new_desired = min(current_desired + matched_step["change"], max_replicas)
+            if matched_step.get("exact") is not None:
+                new_desired = min(matched_step["exact"], max_replicas)
+            else:
+                new_desired = min(current_desired + matched_step["change"], max_replicas)
             if new_desired != current_desired:
                 action = "scale_out"
+                if matched_step.get("exact") is not None:
+                    change_desc = f"exact={matched_step['exact']}"
+                else:
+                    change_desc = f"+{matched_step['change']}"
                 reason = (
                     f"metric {metric_value} > threshold {matched_step['threshold']} "
-                    f"for {current_breaches}/{required} checks, +{matched_step['change']}"
+                    f"for {current_breaches}/{required} checks, {change_desc}"
                 )
                 breach_counts[breach_key] = 0
             else:

@@ -106,14 +106,28 @@ variable "sqs" {
 variable "scale_out_steps" {
   type = list(object({
     threshold            = number
-    change               = number
+    change               = optional(number)
+    exact                = optional(number)
     consecutive_breaches = optional(number, 1)
   }))
-  description = "Scale-out step ladder. Highest matching threshold wins. consecutive_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately)."
+  description = "Scale-out step ladder. Highest matching threshold wins. Each step must set either 'change' (relative +N) or 'exact' (set to exactly N tasks). consecutive_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately)."
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.change > 0])
-    error_message = "All scale_out_steps must have change > 0."
+    condition = alltrue([
+      for s in var.scale_out_steps :
+      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+    ])
+    error_message = "Each scale_out_step must set exactly one of 'change' or 'exact'."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.scale_out_steps : s.change == null || s.change > 0])
+    error_message = "All scale_out_steps with 'change' must have change > 0."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.scale_out_steps : s.exact == null || s.exact > 0])
+    error_message = "All scale_out_steps with 'exact' must have exact > 0."
   }
 
   validation {
