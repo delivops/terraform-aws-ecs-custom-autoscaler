@@ -231,3 +231,84 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 ## License
 
 MIT
+
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+|------|---------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
+| <a name="requirement_archive"></a> [archive](#requirement\_archive) | >= 2.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 5.0 |
+| <a name="requirement_null"></a> [null](#requirement\_null) | >= 3.0 |
+
+## Providers
+
+| Name | Version |
+|------|---------|
+| <a name="provider_archive"></a> [archive](#provider\_archive) | >= 2.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 5.0 |
+| <a name="provider_null"></a> [null](#provider\_null) | >= 3.0 |
+
+## Modules
+
+No modules.
+
+## Resources
+
+| Name | Type |
+|------|------|
+| [aws_cloudwatch_event_rule.schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
+| [aws_cloudwatch_event_target.lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
+| [aws_cloudwatch_log_group.lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_iam_role.lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.cloudwatch](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.ecs_scaling](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.sqs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.ssm](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.vpc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_lambda_function.autoscaler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function) | resource |
+| [aws_lambda_layer_version.deps](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_layer_version) | resource |
+| [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
+| [aws_ssm_parameter.cooldown_state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
+| [null_resource.pip_install](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
+| [archive_file.lambda](https://registry.terraform.io/providers/hashicorp/archive/latest/docs/data-sources/file) | data source |
+| [archive_file.layer](https://registry.terraform.io/providers/hashicorp/archive/latest/docs/data-sources/file) | data source |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|:--------:|
+| <a name="input_cloudwatch"></a> [cloudwatch](#input\_cloudwatch) | CloudWatch metric source configuration. Required when source\_type = 'cloudwatch'. | <pre>object({<br/>    namespace   = string<br/>    metric_name = string<br/>    dimensions  = optional(map(string), {})<br/>    statistic   = optional(string, "Average")<br/>    period      = optional(number, 60)<br/>  })</pre> | `null` | no |
+| <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | ECS cluster name | `string` | n/a | yes |
+| <a name="input_command"></a> [command](#input\_command) | Command source configuration. Required when source\_type = 'command'. | <pre>object({<br/>    script     = string<br/>    layer_arns = optional(list(string), [])<br/>  })</pre> | `null` | no |
+| <a name="input_http"></a> [http](#input\_http) | HTTP source configuration. Required when source\_type = 'http'. | <pre>object({<br/>    url     = string<br/>    method  = optional(string, "GET")<br/>    headers = optional(map(string), {})<br/>    jq_path = optional(string, ".value")<br/>  })</pre> | `null` | no |
+| <a name="input_lambda_memory"></a> [lambda\_memory](#input\_lambda\_memory) | Lambda memory in MB | `number` | `256` | no |
+| <a name="input_lambda_timeout"></a> [lambda\_timeout](#input\_lambda\_timeout) | Lambda timeout in seconds | `number` | `30` | no |
+| <a name="input_log_retention"></a> [log\_retention](#input\_log\_retention) | CloudWatch log retention in days | `number` | `14` | no |
+| <a name="input_max_replicas"></a> [max\_replicas](#input\_max\_replicas) | Maximum task count | `number` | n/a | yes |
+| <a name="input_min_replicas"></a> [min\_replicas](#input\_min\_replicas) | Minimum task count (can be 0) | `number` | `0` | no |
+| <a name="input_redis"></a> [redis](#input\_redis) | Redis source configuration. Required when source\_type = 'redis'. | <pre>object({<br/>    url     = string<br/>    key     = string<br/>    command = optional(string, "LLEN")<br/>  })</pre> | `null` | no |
+| <a name="input_scale_in"></a> [scale\_in](#input\_scale\_in) | Scale-in trigger. When metric <= threshold for consecutive\_breaches evaluations, adjust by change. Default consecutive\_breaches = 3 (conservative). | <pre>object({<br/>    threshold            = number<br/>    change               = number<br/>    consecutive_breaches = optional(number, 3)<br/>  })</pre> | <pre>{<br/>  "change": -1,<br/>  "consecutive_breaches": 3,<br/>  "threshold": 0<br/>}</pre> | no |
+| <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
+| <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |
+| <a name="input_scale_out_steps"></a> [scale\_out\_steps](#input\_scale\_out\_steps) | Scale-out step ladder. Highest matching threshold wins. consecutive\_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately). | <pre>list(object({<br/>    threshold            = number<br/>    change               = number<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | n/a | yes |
+| <a name="input_schedule"></a> [schedule](#input\_schedule) | EventBridge rate expression (e.g., 'rate(1 minute)', 'rate(5 minutes)') | `string` | `"rate(1 minute)"` | no |
+| <a name="input_service_name"></a> [service\_name](#input\_service\_name) | ECS service name | `string` | n/a | yes |
+| <a name="input_source_type"></a> [source\_type](#input\_source\_type) | Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command' | `string` | n/a | yes |
+| <a name="input_sqs"></a> [sqs](#input\_sqs) | SQS source configuration. Required when source\_type = 'sqs'. | <pre>object({<br/>    queue_url = string<br/>  })</pre> | `null` | no |
+| <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to all resources | `map(string)` | `{}` | no |
+| <a name="input_vpc_config"></a> [vpc\_config](#input\_vpc\_config) | VPC configuration. Required for Redis or internal HTTP sources. | <pre>object({<br/>    subnet_ids         = list(string)<br/>    security_group_ids = list(string)<br/>  })</pre> | `null` | no |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| <a name="output_lambda_function_arn"></a> [lambda\_function\_arn](#output\_lambda\_function\_arn) | ARN of the autoscaler Lambda function |
+| <a name="output_lambda_function_name"></a> [lambda\_function\_name](#output\_lambda\_function\_name) | Name of the autoscaler Lambda function |
+| <a name="output_log_group_name"></a> [log\_group\_name](#output\_log\_group\_name) | CloudWatch log group name for the autoscaler |
+| <a name="output_schedule_rule_arn"></a> [schedule\_rule\_arn](#output\_schedule\_rule\_arn) | ARN of the EventBridge schedule rule |
+<!-- END_TF_DOCS -->
