@@ -29,10 +29,10 @@ module "queue_autoscaler" {
     { threshold = 50, exact = 10 },  # emergency: jump to max capacity
   ]
 
-  scale_in = {
-    threshold = 0
-    change    = -1
-  }
+  scale_in_steps = [
+    { threshold = 5, change = -1 },
+    { threshold = 0, exact = 0, consecutive_breaches = 5 },
+  ]
 
   scale_in_cooldown = 600
 

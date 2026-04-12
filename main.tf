@@ -23,7 +23,7 @@ locals {
     min_replicas       = var.min_replicas
     max_replicas       = var.max_replicas
     scale_out_steps    = var.scale_out_steps
-    scale_in           = var.scale_in
+    scale_in_steps     = var.scale_in_steps
     scale_out_cooldown = var.scale_out_cooldown
     scale_in_cooldown  = var.scale_in_cooldown
     ssm_path           = local.ssm_path
