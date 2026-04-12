@@ -12,7 +12,8 @@ def _get_client(url):
     if _client is None or _client_url != url:
         if _client is not None:
             _client.close()
-        _client = redis_lib.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+        _client = redis_lib.from_url(url, socket_connect_timeout=5, socket_timeout=5,
+                                       retry_on_timeout=True, health_check_interval=30)
         _client_url = url
     return _client
 

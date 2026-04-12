@@ -50,7 +50,7 @@ resource "null_resource" "pip_install" {
   }
 
   provisioner "local-exec" {
-    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all:"
+    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.12"
   }
 }
 
@@ -74,7 +74,7 @@ data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/lambda/function.zip"
-  excludes    = ["layer", "layer.zip", "function.zip", "requirements.txt", "__pycache__", "*.pyc"]
+  excludes    = ["layer", "layer.zip", "function.zip", "requirements.txt", "__pycache__", "adapters/__pycache__"]
 }
 
 # --- IAM ---
