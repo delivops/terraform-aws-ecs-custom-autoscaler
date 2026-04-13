@@ -59,7 +59,7 @@ module "lambda_function" {
     {
       path             = "${path.module}/lambda"
       pip_requirements = true
-      patterns         = ["!layer/**", "!layer.zip", "!function.zip", "!**/__pycache__/**"]
+      patterns         = ["!layer/.*", "!layer\\.zip", "!function\\.zip", "!.*/__pycache__/.*"]
     }
   ]
 
@@ -79,6 +79,9 @@ module "lambda_function" {
   # IAM — use the module's role, attach our custom policies externally
   create_role = true
   role_name   = local.function_name
+
+  # Prevent redeployment when source hasn't changed
+  trigger_on_package_timestamp = false
 
   # CloudWatch Logs — keep our existing log group
   attach_cloudwatch_logs_policy     = false
