@@ -43,64 +43,59 @@ locals {
   )
 }
 
-# --- Lambda Layer (Python dependencies) ---
+# --- Lambda Function ---
 
-resource "null_resource" "pip_install" {
-  triggers = {
-    requirements    = filemd5("${path.module}/lambda/requirements.txt")
-    layer_installed = fileexists("${path.module}/lambda/layer/python/.installed") ? filemd5("${path.module}/lambda/layer/python/.installed") : "not_installed"
+module "lambda_function" {
+  source  = "terraform-aws-modules/lambda/aws"
+  version = "~> 7.0"
+
+  function_name = local.function_name
+  handler       = "handler.handler"
+  runtime       = "python3.12"
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory
+
+  source_path = [
+    {
+      path             = "${path.module}/lambda"
+      pip_requirements = true
+      patterns         = ["!layer/.*", "!layer\\.zip", "!function\\.zip", "!.*/__pycache__/.*"]
+    }
+  ]
+
+  layers = var.source_type == "command" && var.command != null ? var.command.layer_arns : []
+
+  reserved_concurrent_executions = 1
+
+  environment_variables = {
+    CONFIG = jsonencode(local.lambda_config)
   }
 
-  provisioner "local-exec" {
-    command = "mkdir -p ${path.module}/lambda/layer/python && pip install -r ${path.module}/lambda/requirements.txt -t ${path.module}/lambda/layer/python --upgrade --quiet --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.12 && date > ${path.module}/lambda/layer/python/.installed"
-  }
-}
+  # VPC
+  vpc_subnet_ids         = try(var.vpc_config.subnet_ids, null)
+  vpc_security_group_ids = try(var.vpc_config.security_group_ids, null)
+  attach_network_policy  = var.vpc_config != null
 
-data "archive_file" "layer" {
-  type        = "zip"
-  source_dir  = "${path.module}/lambda/layer"
-  output_path = "${path.module}/lambda/layer.zip"
-  depends_on  = [null_resource.pip_install]
-}
+  # IAM — use the module's role, attach our custom policies externally
+  create_role = true
+  role_name   = local.function_name
 
-resource "aws_lambda_layer_version" "deps" {
-  filename            = data.archive_file.layer.output_path
-  source_code_hash    = data.archive_file.layer.output_base64sha256
-  layer_name          = "${local.function_name}-deps"
-  compatible_runtimes = ["python3.12"]
-}
+  # Prevent redeployment when source hasn't changed
+  trigger_on_package_timestamp = false
 
-# --- Lambda Function Code ---
+  # CloudWatch Logs — keep our existing log group
+  attach_cloudwatch_logs_policy     = false
+  use_existing_cloudwatch_log_group = true
 
-data "archive_file" "lambda" {
-  type        = "zip"
-  source_dir  = "${path.module}/lambda"
-  output_path = "${path.module}/lambda/function.zip"
-  excludes    = ["layer", "layer.zip", "function.zip", "requirements.txt", "__pycache__", "adapters/__pycache__"]
+  tags       = var.tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 # --- IAM ---
 
-resource "aws_iam_role" "lambda" {
-  name = local.function_name
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-  })
-
-  tags = var.tags
-}
-
 resource "aws_iam_role_policy" "ecs_scaling" {
   name = "ecs-scaling"
-  role = aws_iam_role.lambda.id
+  role = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -117,7 +112,7 @@ resource "aws_iam_role_policy" "ecs_scaling" {
 
 resource "aws_iam_role_policy" "logs" {
   name = "logs"
-  role = aws_iam_role.lambda.id
+  role = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -135,7 +130,7 @@ resource "aws_iam_role_policy" "logs" {
 
 resource "aws_iam_role_policy" "ssm" {
   name = "ssm"
-  role = aws_iam_role.lambda.id
+  role = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -153,7 +148,7 @@ resource "aws_iam_role_policy" "ssm" {
 resource "aws_iam_role_policy" "vpc" {
   count = var.vpc_config != null ? 1 : 0
   name  = "vpc"
-  role  = aws_iam_role.lambda.id
+  role  = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -172,7 +167,7 @@ resource "aws_iam_role_policy" "vpc" {
 resource "aws_iam_role_policy" "cloudwatch" {
   count = var.source_type == "cloudwatch" ? 1 : 0
   name  = "cloudwatch"
-  role  = aws_iam_role.lambda.id
+  role  = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -187,7 +182,7 @@ resource "aws_iam_role_policy" "cloudwatch" {
 resource "aws_iam_role_policy" "sqs" {
   count = var.source_type == "sqs" ? 1 : 0
   name  = "sqs"
-  role  = aws_iam_role.lambda.id
+  role  = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -197,43 +192,6 @@ resource "aws_iam_role_policy" "sqs" {
       Resource = "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", try(var.sqs.queue_url, "")), length(split("/", try(var.sqs.queue_url, ""))) - 1)}"
     }]
   })
-}
-
-# --- Lambda Function ---
-
-resource "aws_lambda_function" "autoscaler" {
-  function_name    = local.function_name
-  filename         = data.archive_file.lambda.output_path
-  source_code_hash = data.archive_file.lambda.output_base64sha256
-  handler          = "handler.handler"
-  runtime          = "python3.12"
-  timeout          = var.lambda_timeout
-  memory_size      = var.lambda_memory
-  role             = aws_iam_role.lambda.arn
-
-  layers = concat(
-    [aws_lambda_layer_version.deps.arn],
-    var.source_type == "command" && var.command != null ? var.command.layer_arns : []
-  )
-
-  reserved_concurrent_executions = 1
-
-  environment {
-    variables = {
-      CONFIG = jsonencode(local.lambda_config)
-    }
-  }
-
-  dynamic "vpc_config" {
-    for_each = var.vpc_config != null ? [var.vpc_config] : []
-    content {
-      subnet_ids         = vpc_config.value.subnet_ids
-      security_group_ids = vpc_config.value.security_group_ids
-    }
-  }
-
-  tags       = var.tags
-  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 # --- EventBridge Schedule ---
@@ -246,13 +204,13 @@ resource "aws_cloudwatch_event_rule" "schedule" {
 
 resource "aws_cloudwatch_event_target" "lambda" {
   rule = aws_cloudwatch_event_rule.schedule.name
-  arn  = aws_lambda_function.autoscaler.arn
+  arn  = module.lambda_function.lambda_function_arn
 }
 
 resource "aws_lambda_permission" "eventbridge" {
   statement_id  = "AllowEventBridge"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.autoscaler.function_name
+  function_name = module.lambda_function.lambda_function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.schedule.arn
 }
@@ -276,4 +234,16 @@ resource "aws_ssm_parameter" "cooldown_state" {
   lifecycle {
     ignore_changes = [value]
   }
+}
+
+# --- State Migration ---
+
+moved {
+  from = aws_lambda_function.autoscaler
+  to   = module.lambda_function.aws_lambda_function.this[0]
+}
+
+moved {
+  from = aws_iam_role.lambda
+  to   = module.lambda_function.aws_iam_role.lambda[0]
 }

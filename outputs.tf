@@ -1,11 +1,11 @@
 output "lambda_function_arn" {
   description = "ARN of the autoscaler Lambda function"
-  value       = aws_lambda_function.autoscaler.arn
+  value       = module.lambda_function.lambda_function_arn
 }
 
 output "lambda_function_name" {
   description = "Name of the autoscaler Lambda function"
-  value       = aws_lambda_function.autoscaler.function_name
+  value       = module.lambda_function.lambda_function_name
 }
 
 output "log_group_name" {
