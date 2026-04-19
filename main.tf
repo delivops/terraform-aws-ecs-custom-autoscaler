@@ -7,12 +7,12 @@ locals {
   ssm_path          = "/ecs-autoscaler/${var.cluster_name}/${var.service_name}/state"
 
   source_config_json = (
-    var.source_type == "redis"      ? jsonencode(var.redis) :
-    var.source_type == "bullmq"     ? jsonencode(var.bullmq) :
-    var.source_type == "http"       ? jsonencode(var.http) :
-    var.source_type == "command"    ? jsonencode(var.command) :
+    var.source_type == "redis" ? jsonencode(var.redis) :
+    var.source_type == "bullmq" ? jsonencode(var.bullmq) :
+    var.source_type == "http" ? jsonencode(var.http) :
+    var.source_type == "command" ? jsonencode(var.command) :
     var.source_type == "cloudwatch" ? jsonencode(var.cloudwatch) :
-    var.source_type == "sqs"        ? jsonencode(var.sqs) :
+    var.source_type == "sqs" ? jsonencode(var.sqs) :
     null
   )
 

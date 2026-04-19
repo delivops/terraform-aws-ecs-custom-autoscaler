@@ -13,9 +13,9 @@ module "worker_autoscaler" {
 
   source_type = "http"
   http = {
-    url     = "https://internal-api.example.com/metrics/pending-jobs"
-    method  = "GET"
-    headers = { "Authorization" = "Bearer token-placeholder" }
+    url       = "https://internal-api.example.com/metrics/pending-jobs"
+    method    = "GET"
+    headers   = { "Authorization" = "Bearer token-placeholder" }
     json_path = ".data.pending_count"
   }
 
