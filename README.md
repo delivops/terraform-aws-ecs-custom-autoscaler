@@ -151,6 +151,15 @@ sqs = {
 }
 ```
 
+For scale-to-zero workers with long-running message processing, set `include_in_flight = true` to also count messages currently being processed (sums `ApproximateNumberOfMessages` + `ApproximateNumberOfMessagesNotVisible`):
+
+```hcl
+sqs = {
+  queue_url         = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+  include_in_flight = true
+}
+```
+
 ### Command
 
 Escape hatch: runs any shell command and parses stdout as a number. Supports custom Lambda layers.
@@ -342,7 +351,7 @@ MIT
 | <a name="input_schedule"></a> [schedule](#input\_schedule) | EventBridge rate expression (e.g., 'rate(1 minute)', 'rate(5 minutes)') | `string` | `"rate(1 minute)"` | no |
 | <a name="input_service_name"></a> [service\_name](#input\_service\_name) | ECS service name | `string` | n/a | yes |
 | <a name="input_source_type"></a> [source\_type](#input\_source\_type) | Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command' | `string` | n/a | yes |
-| <a name="input_sqs"></a> [sqs](#input\_sqs) | SQS source configuration. Required when source\_type = 'sqs'. | <pre>object({<br/>    queue_url = string<br/>  })</pre> | `null` | no |
+| <a name="input_sqs"></a> [sqs](#input\_sqs) | SQS source configuration. Required when source\_type = 'sqs'. Set include\_in\_flight = true to sum ApproximateNumberOfMessages + ApproximateNumberOfMessagesNotVisible (useful when scale-in must wait for in-flight work to finish). | <pre>object({<br/>    queue_url         = string<br/>    include_in_flight = optional(bool, false)<br/>  })</pre> | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to all resources | `map(string)` | `{}` | no |
 | <a name="input_vpc_config"></a> [vpc\_config](#input\_vpc\_config) | VPC configuration. Required for Redis or internal HTTP sources. | <pre>object({<br/>    subnet_ids         = list(string)<br/>    security_group_ids = list(string)<br/>  })</pre> | `null` | no |
 

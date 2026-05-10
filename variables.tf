@@ -109,10 +109,11 @@ variable "cloudwatch" {
 
 variable "sqs" {
   type = object({
-    queue_url = string
+    queue_url         = string
+    include_in_flight = optional(bool, false)
   })
   default     = null
-  description = "SQS source configuration. Required when source_type = 'sqs'."
+  description = "SQS source configuration. Required when source_type = 'sqs'. Set include_in_flight = true to sum ApproximateNumberOfMessages + ApproximateNumberOfMessagesNotVisible (useful when scale-in must wait for in-flight work to finish)."
 }
 
 variable "scale_out_steps" {
