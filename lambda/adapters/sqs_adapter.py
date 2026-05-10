@@ -8,9 +8,13 @@ def read_metric(config):
 
     Config keys:
         queue_url: SQS queue URL
+        include_in_flight: also count ApproximateNumberOfMessagesNotVisible (default: False)
     """
+    attrs = ["ApproximateNumberOfMessages"]
+    if config.get("include_in_flight"):
+        attrs.append("ApproximateNumberOfMessagesNotVisible")
     response = sqs.get_queue_attributes(
         QueueUrl=config["queue_url"],
-        AttributeNames=["ApproximateNumberOfMessages"],
+        AttributeNames=attrs,
     )
-    return float(response["Attributes"]["ApproximateNumberOfMessages"])
+    return sum(float(response["Attributes"][a]) for a in attrs)

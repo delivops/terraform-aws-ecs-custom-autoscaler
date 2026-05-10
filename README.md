@@ -151,6 +151,15 @@ sqs = {
 }
 ```
 
+For scale-to-zero workers with long-running message processing, set `include_in_flight = true` to also count messages currently being processed (sums `ApproximateNumberOfMessages` + `ApproximateNumberOfMessagesNotVisible`):
+
+```hcl
+sqs = {
+  queue_url         = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+  include_in_flight = true
+}
+```
+
 ### Command
 
 Escape hatch: runs any shell command and parses stdout as a number. Supports custom Lambda layers.
