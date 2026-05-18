@@ -160,6 +160,33 @@ sqs = {
 }
 ```
 
+### Victoria Metrics
+
+Queries a [Victoria Metrics](https://victoriametrics.com/) instance via the PromQL-compatible `/api/v1/query` endpoint. Useful when scaling decisions need to be driven by application-level Prometheus/Victoria Metrics data (request rates, queue depths exposed via `/metrics`, business KPIs, etc.).
+
+```hcl
+source_type = "victoria_metrics"
+victoria_metrics = {
+  url   = "http://vmselect.monitoring.internal:8481/select/0/prometheus"
+  query = "sum(rate(http_requests_total{service=\"api_worker\"}[1m]))"
+}
+```
+
+Scalar results are used directly. Vector results are summed across all returned samples (e.g. `sum by (...) (...)` queries that return one row per label combination). The path `/api/v1/query` is appended to `url` automatically if not already present.
+
+Optional fields:
+
+```hcl
+victoria_metrics = {
+  url      = "https://vm.example.com"
+  query    = "sum(myapp_queue_depth)"
+  headers  = { "Authorization" = "Bearer xxx" }
+  username = "user"           # for HTTP basic auth
+  password = "pass"
+  timeout  = 10               # seconds, default 10
+}
+```
+
 ### Command
 
 Escape hatch: runs any shell command and parses stdout as a number. Supports custom Lambda layers.
@@ -211,7 +238,7 @@ After a scaling action occurs, further actions of the same type are suppressed f
 
 ### How It Works
 
-1. **Read metric** from the configured source (redis/bullmq/http/cloudwatch/sqs/command)
+1. **Read metric** from the configured source (redis/bullmq/http/cloudwatch/sqs/victoria_metrics/command)
 2. **Describe ECS service** to get current desired count
 3. **Read state** from SSM Parameter Store (cooldown timestamps + breach counters)
 4. **Evaluate**:
@@ -246,12 +273,13 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `min_replicas` | `number` | `0` | Minimum task count |
 | `max_replicas` | `number` | - | Maximum task count |
 | `schedule` | `string` | `"rate(1 minute)"` | EventBridge rate expression |
-| `source_type` | `string` | - | `"redis"`, `"bullmq"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
+| `source_type` | `string` | - | `"redis"`, `"bullmq"`, `"http"`, `"cloudwatch"`, `"sqs"`, `"victoria_metrics"`, or `"command"` |
 | `redis` | `object` | `null` | Redis source config |
 | `bullmq` | `object` | `null` | BullMQ source config |
 | `http` | `object` | `null` | HTTP source config |
 | `cloudwatch` | `object` | `null` | CloudWatch metric source config |
 | `sqs` | `object` | `null` | SQS source config |
+| `victoria_metrics` | `object` | `null` | Victoria Metrics source config |
 | `command` | `object` | `null` | Command source config |
 | `scale_out_steps` | `list(object)` | - | Step ladder (threshold + change) |
 | `scale_in_steps` | `list(object)` | `[{threshold=0, change=-1}]` | Scale-in step ladder (threshold + change/exact) |

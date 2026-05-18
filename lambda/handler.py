@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 import boto3
 
 from adapters import (bullmq_adapter, cloudwatch_adapter, command_adapter,
-                      http_adapter, redis_adapter, sqs_adapter)
+                      http_adapter, redis_adapter, sqs_adapter,
+                      victoria_metrics_adapter)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -21,6 +22,7 @@ ADAPTERS = {
     "command": command_adapter.read_metric,
     "cloudwatch": cloudwatch_adapter.read_metric,
     "sqs": sqs_adapter.read_metric,
+    "victoria_metrics": victoria_metrics_adapter.read_metric,
 }
 
 

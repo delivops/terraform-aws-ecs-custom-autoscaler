@@ -37,11 +37,11 @@ variable "schedule" {
 
 variable "source_type" {
   type        = string
-  description = "Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command'"
+  description = "Metric source type: 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', 'victoria_metrics', or 'command'"
 
   validation {
-    condition     = contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "command"], var.source_type)
-    error_message = "source_type must be 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', or 'command'."
+    condition     = contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "victoria_metrics", "command"], var.source_type)
+    error_message = "source_type must be 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', 'victoria_metrics', or 'command'."
   }
 }
 
@@ -105,6 +105,20 @@ variable "cloudwatch" {
   })
   default     = null
   description = "CloudWatch metric source configuration. Required when source_type = 'cloudwatch'."
+}
+
+variable "victoria_metrics" {
+  type = object({
+    url      = string
+    query    = string
+    headers  = optional(map(string), {})
+    username = optional(string)
+    password = optional(string)
+    timeout  = optional(number, 10)
+  })
+  default     = null
+  sensitive   = true
+  description = "Victoria Metrics source configuration. Required when source_type = 'victoria_metrics'. 'url' is the Victoria Metrics base URL (e.g. 'http://vmselect:8481/select/0/prometheus'); '/api/v1/query' is appended automatically. 'query' is a PromQL/MetricsQL expression — scalar results are used as-is, vector results are summed across all returned samples."
 }
 
 variable "sqs" {

@@ -13,6 +13,7 @@ locals {
     var.source_type == "command" ? jsonencode(var.command) :
     var.source_type == "cloudwatch" ? jsonencode(var.cloudwatch) :
     var.source_type == "sqs" ? jsonencode(var.sqs) :
+    var.source_type == "victoria_metrics" ? jsonencode(var.victoria_metrics) :
     null
   )
 
