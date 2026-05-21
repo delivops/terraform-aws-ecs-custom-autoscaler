@@ -243,3 +243,180 @@ variable "tags" {
   description = "Tags to apply to all resources"
   default     = {}
 }
+
+# --- Secondary source (multi-source scaling) ---
+
+variable "secondary_source_type" {
+  type        = string
+  default     = null
+  description = "Optional secondary metric source type. When set, both sources are evaluated independently and combined using multi_source_strategy."
+
+  validation {
+    condition     = var.secondary_source_type == null || contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "victoria_metrics", "command"], var.secondary_source_type)
+    error_message = "secondary_source_type must be 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', 'victoria_metrics', or 'command'."
+  }
+}
+
+variable "secondary_redis" {
+  type = object({
+    url     = string
+    key     = optional(string)
+    keys    = optional(list(string))
+    command = optional(string, "LLEN")
+  })
+  default     = null
+  description = "Redis source configuration for the secondary source. Required when secondary_source_type = 'redis'."
+
+  validation {
+    condition = var.secondary_redis == null || try(
+      (var.secondary_redis.key != null ? 1 : 0) + (var.secondary_redis.keys != null ? 1 : 0) == 1,
+      false
+    )
+    error_message = "Exactly one of 'key' or 'keys' must be set in the secondary_redis configuration."
+  }
+}
+
+variable "secondary_bullmq" {
+  type = object({
+    url        = string
+    queue_name = string
+    prefix     = optional(string, "bull")
+    include    = optional(list(string), ["wait", "active", "delayed"])
+  })
+  default     = null
+  description = "BullMQ source configuration for the secondary source. Required when secondary_source_type = 'bullmq'."
+}
+
+variable "secondary_http" {
+  type = object({
+    url       = string
+    method    = optional(string, "GET")
+    headers   = optional(map(string), {})
+    json_path = optional(string, ".value")
+  })
+  default     = null
+  description = "HTTP source configuration for the secondary source. Required when secondary_source_type = 'http'."
+}
+
+variable "secondary_command" {
+  type = object({
+    script     = string
+    layer_arns = optional(list(string), [])
+  })
+  default     = null
+  description = "Command source configuration for the secondary source. Required when secondary_source_type = 'command'. WARNING: script is executed via shell — only use trusted values."
+}
+
+variable "secondary_cloudwatch" {
+  type = object({
+    namespace   = string
+    metric_name = string
+    dimensions  = optional(map(string), {})
+    statistic   = optional(string, "Average")
+    period      = optional(number, 60)
+  })
+  default     = null
+  description = "CloudWatch metric source configuration for the secondary source. Required when secondary_source_type = 'cloudwatch'."
+}
+
+variable "secondary_victoria_metrics" {
+  type = object({
+    url      = string
+    query    = string
+    headers  = optional(map(string), {})
+    username = optional(string)
+    password = optional(string)
+    timeout  = optional(number, 10)
+  })
+  default     = null
+  sensitive   = true
+  description = "Victoria Metrics source configuration for the secondary source. Required when secondary_source_type = 'victoria_metrics'."
+}
+
+variable "secondary_sqs" {
+  type = object({
+    queue_url         = string
+    include_in_flight = optional(bool, false)
+  })
+  default     = null
+  description = "SQS source configuration for the secondary source. Required when secondary_source_type = 'sqs'."
+}
+
+variable "secondary_scale_out_steps" {
+  type = list(object({
+    threshold            = number
+    change               = optional(number)
+    exact                = optional(number)
+    consecutive_breaches = optional(number, 1)
+  }))
+  default     = null
+  description = "Scale-out step ladder for the secondary source. When null, the primary scale_out_steps are reused as a fallback."
+
+  validation {
+    condition = var.secondary_scale_out_steps == null || alltrue([
+      for s in var.secondary_scale_out_steps :
+      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+    ])
+    error_message = "Each secondary_scale_out_step must set exactly one of 'change' or 'exact'."
+  }
+
+  validation {
+    condition     = var.secondary_scale_out_steps == null || alltrue([for s in var.secondary_scale_out_steps : s.change == null ? true : s.change > 0])
+    error_message = "All secondary_scale_out_steps with 'change' must have change > 0."
+  }
+
+  validation {
+    condition     = var.secondary_scale_out_steps == null || alltrue([for s in var.secondary_scale_out_steps : s.exact == null ? true : s.exact > 0])
+    error_message = "All secondary_scale_out_steps with 'exact' must have exact > 0."
+  }
+
+  validation {
+    condition     = var.secondary_scale_out_steps == null || alltrue([for s in var.secondary_scale_out_steps : s.consecutive_breaches > 0])
+    error_message = "All secondary_scale_out_steps must have consecutive_breaches > 0."
+  }
+}
+
+variable "secondary_scale_in_steps" {
+  type = list(object({
+    threshold            = number
+    change               = optional(number)
+    exact                = optional(number)
+    consecutive_breaches = optional(number, 3)
+  }))
+  default     = null
+  description = "Scale-in step ladder for the secondary source. When null, the primary scale_in_steps are reused as a fallback."
+
+  validation {
+    condition = var.secondary_scale_in_steps == null || alltrue([
+      for s in var.secondary_scale_in_steps :
+      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+    ])
+    error_message = "Each secondary_scale_in_step must set exactly one of 'change' or 'exact'."
+  }
+
+  validation {
+    condition     = var.secondary_scale_in_steps == null || alltrue([for s in var.secondary_scale_in_steps : s.change == null ? true : s.change < 0])
+    error_message = "All secondary_scale_in_steps with 'change' must have change < 0."
+  }
+
+  validation {
+    condition     = var.secondary_scale_in_steps == null || alltrue([for s in var.secondary_scale_in_steps : s.exact == null ? true : s.exact >= 0])
+    error_message = "All secondary_scale_in_steps with 'exact' must have exact >= 0."
+  }
+
+  validation {
+    condition     = var.secondary_scale_in_steps == null || alltrue([for s in var.secondary_scale_in_steps : s.consecutive_breaches > 0])
+    error_message = "All secondary_scale_in_steps must have consecutive_breaches > 0."
+  }
+}
+
+variable "multi_source_strategy" {
+  type        = string
+  default     = "min"
+  description = "Strategy for combining decisions from two sources. 'min' (conservative): both must agree; 'max' (aggressive): either can trigger; 'primary_wins': primary decides, secondary can only block the opposite direction."
+
+  validation {
+    condition     = contains(["min", "max", "primary_wins"], var.multi_source_strategy)
+    error_message = "multi_source_strategy must be 'min', 'max', or 'primary_wins'."
+  }
+}

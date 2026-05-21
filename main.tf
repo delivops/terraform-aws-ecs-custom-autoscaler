@@ -17,24 +17,61 @@ locals {
     null
   )
 
-  lambda_config = {
-    cluster_name       = var.cluster_name
-    service_name       = var.service_name
-    source_type        = var.source_type
-    source_config      = jsondecode(local.source_config_json)
-    min_replicas       = var.min_replicas
-    max_replicas       = var.max_replicas
-    scale_out_steps    = var.scale_out_steps
-    scale_in_steps     = var.scale_in_steps
-    scale_out_cooldown = var.scale_out_cooldown
-    scale_in_cooldown  = var.scale_in_cooldown
-    ssm_path           = local.ssm_path
-  }
+  secondary_source_config_json = (
+    var.secondary_source_type == null ? null :
+    var.secondary_source_type == "redis" ? jsonencode(var.secondary_redis) :
+    var.secondary_source_type == "bullmq" ? jsonencode(var.secondary_bullmq) :
+    var.secondary_source_type == "http" ? jsonencode(var.secondary_http) :
+    var.secondary_source_type == "command" ? jsonencode(var.secondary_command) :
+    var.secondary_source_type == "cloudwatch" ? jsonencode(var.secondary_cloudwatch) :
+    var.secondary_source_type == "sqs" ? jsonencode(var.secondary_sqs) :
+    var.secondary_source_type == "victoria_metrics" ? jsonencode(var.secondary_victoria_metrics) :
+    null
+  )
+
+  lambda_config = merge(
+    {
+      cluster_name       = var.cluster_name
+      service_name       = var.service_name
+      source_type        = var.source_type
+      source_config      = jsondecode(local.source_config_json)
+      min_replicas       = var.min_replicas
+      max_replicas       = var.max_replicas
+      scale_out_steps    = var.scale_out_steps
+      scale_in_steps     = var.scale_in_steps
+      scale_out_cooldown = var.scale_out_cooldown
+      scale_in_cooldown  = var.scale_in_cooldown
+      ssm_path           = local.ssm_path
+    },
+    var.secondary_source_type != null ? {
+      secondary_source_type     = var.secondary_source_type
+      secondary_source_config   = jsondecode(local.secondary_source_config_json)
+      secondary_scale_out_steps = var.secondary_scale_out_steps
+      secondary_scale_in_steps  = var.secondary_scale_in_steps
+      multi_source_strategy     = var.multi_source_strategy
+    } : {}
+  )
 
   # Validate source config is provided for the selected source_type
   validate_source_config = (
     local.source_config_json != null ? true :
     tobool("ERROR: ${var.source_type} configuration is required when source_type = '${var.source_type}'")
+  )
+
+  # Validate secondary source config is provided when secondary_source_type is set.
+  # We check the actual variable (not secondary_source_config_json) because
+  # jsonencode(null) produces the string "null", which is never Terraform null,
+  # causing the json-based check to incorrectly pass when the config is missing.
+  validate_secondary_source_config = (
+    var.secondary_source_type == null ? true :
+    var.secondary_source_type == "redis" && var.secondary_redis != null ? true :
+    var.secondary_source_type == "bullmq" && var.secondary_bullmq != null ? true :
+    var.secondary_source_type == "http" && var.secondary_http != null ? true :
+    var.secondary_source_type == "command" && var.secondary_command != null ? true :
+    var.secondary_source_type == "cloudwatch" && var.secondary_cloudwatch != null ? true :
+    var.secondary_source_type == "sqs" && var.secondary_sqs != null ? true :
+    var.secondary_source_type == "victoria_metrics" && var.secondary_victoria_metrics != null ? true :
+    tobool("ERROR: secondary_${var.secondary_source_type} configuration is required when secondary_source_type = '${var.secondary_source_type}'")
   )
 
   # Validate min_replicas <= max_replicas
@@ -64,7 +101,10 @@ module "lambda_function" {
     }
   ]
 
-  layers = var.source_type == "command" && var.command != null ? var.command.layer_arns : []
+  layers = concat(
+    var.source_type == "command" && var.command != null ? var.command.layer_arns : [],
+    var.secondary_source_type == "command" && var.secondary_command != null ? var.secondary_command.layer_arns : []
+  )
 
   reserved_concurrent_executions = 1
 
@@ -166,7 +206,7 @@ resource "aws_iam_role_policy" "vpc" {
 }
 
 resource "aws_iam_role_policy" "cloudwatch" {
-  count = var.source_type == "cloudwatch" ? 1 : 0
+  count = var.source_type == "cloudwatch" || var.secondary_source_type == "cloudwatch" ? 1 : 0
   name  = "cloudwatch"
   role  = module.lambda_function.lambda_role_name
 
@@ -181,16 +221,19 @@ resource "aws_iam_role_policy" "cloudwatch" {
 }
 
 resource "aws_iam_role_policy" "sqs" {
-  count = var.source_type == "sqs" ? 1 : 0
+  count = var.source_type == "sqs" || var.secondary_source_type == "sqs" ? 1 : 0
   name  = "sqs"
   role  = module.lambda_function.lambda_role_name
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["sqs:GetQueueAttributes"]
-      Resource = "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", try(var.sqs.queue_url, "")), length(split("/", try(var.sqs.queue_url, ""))) - 1)}"
+      Effect = "Allow"
+      Action = ["sqs:GetQueueAttributes"]
+      Resource = compact([
+        var.source_type == "sqs" ? "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", try(var.sqs.queue_url, "")), length(split("/", try(var.sqs.queue_url, ""))) - 1)}" : null,
+        var.secondary_source_type == "sqs" ? "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", try(var.secondary_sqs.queue_url, "")), length(split("/", try(var.secondary_sqs.queue_url, ""))) - 1)}" : null,
+      ])
     }]
   })
 }
