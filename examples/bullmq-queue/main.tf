@@ -2,6 +2,8 @@ provider "aws" {
   region = "us-east-2"
 }
 
+# BullMQ queue depth, target-tracked at 1 replica per 10 jobs.
+
 module "queue_autoscaler" {
   source = "../../"
 
@@ -11,22 +13,18 @@ module "queue_autoscaler" {
   max_replicas = 10
   schedule     = "rate(1 minute)"
 
-  source_type = "bullmq"
-  bullmq = {
-    url        = "redis://my-redis.example.cache.amazonaws.com:6379/0"
-    queue_name = "my-jobs"
+  sources = {
+    jobs = {
+      type = "bullmq"
+      bullmq = {
+        url        = "redis://my-redis.example.cache.amazonaws.com:6379/0"
+        queue_name = "my-jobs"
+      }
+    }
   }
 
-  scale_out_steps = [
-    { threshold = 5, change = 1 },
-    { threshold = 10, change = 2 },
-    { threshold = 20, change = 3 },
-    { threshold = 50, exact = 10 },
-  ]
-
-  scale_in_steps = [
-    { threshold = 5, change = -1 },
-    { threshold = 0, exact = 0, consecutive_breaches = 5 },
+  targets = [
+    { name = "jobs_per_worker", source = "jobs", per = 10 },
   ]
 
   vpc_config = {

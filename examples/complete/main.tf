@@ -2,152 +2,109 @@ provider "aws" {
   region = "us-east-2"
 }
 
-# Example: Redis-based autoscaler with all options
+# --- Combined: multiple sources, targets + step rules -----------------------
+# Two SQS queues and a CloudWatch CPU metric drive one service. Steady-state
+# capacity is target-tracked; a multi-source AND rule adds an emergency burst.
 
-module "redis_autoscaler" {
-  source = "../../"
-
-  cluster_name = "prod"
-  service_name = "job_processor"
-  min_replicas = 0
-  max_replicas = 50
-  schedule     = "rate(1 minute)"
-
-  source_type = "redis"
-  redis = {
-    url     = "redis://my-redis.example.cache.amazonaws.com:6379/0"
-    key     = "myapp:jobs:pending"
-    command = "LLEN"
-  }
-
-  scale_out_steps = [
-    { threshold = 5, change = 1 },
-    { threshold = 10, change = 2 },
-    { threshold = 20, change = 3 },
-    { threshold = 50, change = 5 },
-    { threshold = 100, change = 10 },
-  ]
-
-  scale_in = {
-    threshold = 0
-    change    = -1
-  }
-
-  scale_out_cooldown = 60
-  scale_in_cooldown  = 600
-
-  vpc_config = {
-    subnet_ids         = ["subnet-abc123", "subnet-def456"]
-    security_group_ids = ["sg-abc123"]
-  }
-
-  lambda_timeout = 30
-  lambda_memory  = 256
-  log_retention  = 30
-
-  tags = {
-    Environment = "prod"
-    Team        = "platform"
-    ManagedBy   = "terraform"
-  }
-}
-
-# Example: CloudWatch metric-based autoscaler
-
-module "cloudwatch_autoscaler" {
-  source = "../../"
-
-  cluster_name = "prod"
-  service_name = "message_consumer"
-  min_replicas = 0
-  max_replicas = 20
-  schedule     = "rate(1 minute)"
-
-  source_type = "cloudwatch"
-  cloudwatch = {
-    namespace   = "AWS/SQS"
-    metric_name = "ApproximateNumberOfMessagesVisible"
-    dimensions  = { "QueueName" = "processing-queue" }
-    statistic   = "Average"
-    period      = 60
-  }
-
-  scale_out_steps = [
-    { threshold = 10, change = 1 },
-    { threshold = 100, change = 3 },
-    { threshold = 1000, change = 10 },
-  ]
-
-  scale_in = {
-    threshold = 0
-    change    = -1
-  }
-
-  tags = {
-    Environment = "prod"
-  }
-}
-
-# Example: SQS-based autoscaler (real-time, no CloudWatch delay)
-
-module "sqs_autoscaler" {
+module "combined_autoscaler" {
   source = "../../"
 
   cluster_name = "prod"
   service_name = "order_processor"
+  min_replicas = 1
+  max_replicas = 50
+  schedule     = "rate(1 minute)"
+
+  sources = {
+    orders_q = {
+      type = "sqs"
+      sqs  = { queue_url = "https://sqs.us-east-2.amazonaws.com/123456789012/orders" }
+    }
+    payments_q = {
+      type = "sqs"
+      sqs  = { queue_url = "https://sqs.us-east-2.amazonaws.com/123456789012/payments" }
+    }
+    cpu = {
+      type = "cloudwatch"
+      cloudwatch = {
+        namespace   = "AWS/ECS"
+        metric_name = "CPUUtilization"
+        dimensions  = { ClusterName = "prod", ServiceName = "order_processor" }
+        statistic   = "Average"
+        period      = 60
+      }
+    }
+  }
+
+  targets = [
+    # 1 replica per 100 orders, 1 per 100 payments (max of the two wins)
+    { name = "orders_ratio", source = "orders_q", per = 100 },
+    { name = "payments_ratio", source = "payments_q", per = 100 },
+    # keep average CPU around 70%
+    { name = "cpu_target", source = "cpu", target_avg = 70 },
+  ]
+
+  scale_out_rules = [
+    {
+      name  = "burst"
+      match = "all" # AND
+      conditions = [
+        { source = "orders_q", op = ">", value = 5000 },
+        { source = "cpu", op = ">", value = 70 },
+      ]
+      change = 5
+    },
+  ]
+
+  scale_out_cooldown = 60
+  scale_in_cooldown  = 600
+
+  tags = {
+    Environment = "prod"
+    Team        = "platform"
+  }
+}
+
+# --- Scale-to-zero with target_avg + bootstrap rule -------------------------
+# target_avg cannot lift a service from 0 tasks, so a step rule on a request
+# counter wakes it; thereafter the CPU target governs capacity.
+
+module "scale_to_zero" {
+  source = "../../"
+
+  cluster_name = "prod"
+  service_name = "bursty_api"
   min_replicas = 0
   max_replicas = 20
   schedule     = "rate(1 minute)"
 
-  source_type = "sqs"
-  sqs = {
-    queue_url = "https://sqs.us-east-2.amazonaws.com/123456789012/order-processing"
+  sources = {
+    cpu = {
+      type = "cloudwatch"
+      cloudwatch = {
+        namespace   = "AWS/ECS"
+        metric_name = "CPUUtilization"
+        dimensions  = { ClusterName = "prod", ServiceName = "bursty_api" }
+      }
+    }
+    inflight = {
+      type = "http"
+      http = {
+        url       = "https://internal-api.example.com/metrics"
+        json_path = ".inflight_requests"
+      }
+    }
   }
 
-  scale_out_steps = [
-    { threshold = 10, change = 1 },
-    { threshold = 100, change = 3 },
-    { threshold = 1000, change = 10 },
+  targets = [
+    { name = "cpu_target", source = "cpu", target_avg = 70 },
   ]
 
-  scale_in = {
-    threshold = 0
-    change    = -1
-  }
-
-  tags = {
-    Environment = "prod"
-  }
-}
-
-# Example: Command-based autoscaler (escape hatch)
-
-module "custom_autoscaler" {
-  source = "../../"
-
-  cluster_name = "prod"
-  service_name = "batch_worker"
-  min_replicas = 1
-  max_replicas = 10
-  schedule     = "rate(5 minutes)"
-
-  source_type = "command"
-  command = {
-    script     = "python3 -c \"import json,urllib.request; print(json.load(urllib.request.urlopen('http://internal:8080/pending'))['count'])\""
-    layer_arns = []
-  }
-
-  scale_out_steps = [
-    { threshold = 10, change = 1 },
-    { threshold = 50, change = 5 },
+  scale_out_rules = [
+    { name = "wake", conditions = [{ source = "inflight", op = ">", value = 0 }], change = 1 },
   ]
 
-  vpc_config = {
-    subnet_ids         = ["subnet-abc123"]
-    security_group_ids = ["sg-abc123"]
-  }
-
-  tags = {
-    Environment = "prod"
-  }
+  scale_in_rules = [
+    { name = "sleep", conditions = [{ source = "inflight", op = "==", value = 0 }], change = -1, consecutive_breaches = 5 },
+  ]
 }

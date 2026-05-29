@@ -35,153 +35,317 @@ variable "schedule" {
   default     = "rate(1 minute)"
 }
 
-variable "source_type" {
-  type        = string
-  description = "Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command'"
+# --- Sources ---------------------------------------------------------------
+
+variable "sources" {
+  description = <<-EOT
+    Named map of metric sources. Each entry sets `type` (redis, bullmq, http,
+    cloudwatch, sqs, victoria_metrics, command) and exactly one matching
+    configuration block. Sources are referenced by their map key from `targets`
+    and `*_rules`.
+  EOT
+
+  type = map(object({
+    type = string
+
+    redis = optional(object({
+      url     = string
+      key     = optional(string)
+      keys    = optional(list(string))
+      command = optional(string, "LLEN")
+    }))
+
+    bullmq = optional(object({
+      url        = string
+      queue_name = string
+      prefix     = optional(string, "bull")
+      include    = optional(list(string), ["wait", "active", "delayed"])
+    }))
+
+    http = optional(object({
+      url       = string
+      method    = optional(string, "GET")
+      headers   = optional(map(string), {})
+      json_path = optional(string, ".value")
+    }))
+
+    cloudwatch = optional(object({
+      namespace   = string
+      metric_name = string
+      dimensions  = optional(map(string), {})
+      statistic   = optional(string, "Average")
+      period      = optional(number, 60)
+    }))
+
+    sqs = optional(object({
+      queue_url         = string
+      include_in_flight = optional(bool, false)
+    }))
+
+    victoria_metrics = optional(object({
+      url      = string
+      query    = string
+      headers  = optional(map(string), {})
+      username = optional(string)
+      password = optional(string)
+      timeout  = optional(number, 10)
+    }))
+
+    command = optional(object({
+      script     = string
+      layer_arns = optional(list(string), [])
+    }))
+  }))
 
   validation {
-    condition     = contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "command"], var.source_type)
-    error_message = "source_type must be 'redis', 'bullmq', 'http', 'cloudwatch', 'sqs', or 'command'."
+    condition     = length(var.sources) > 0
+    error_message = "At least one source must be defined."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.sources) :
+      contains(["redis", "bullmq", "http", "cloudwatch", "sqs", "victoria_metrics", "command"], s.type)
+    ])
+    error_message = "Each source 'type' must be one of: redis, bullmq, http, cloudwatch, sqs, victoria_metrics, command."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.sources) :
+      (s.redis != null ? 1 : 0) + (s.bullmq != null ? 1 : 0) + (s.http != null ? 1 : 0) +
+      (s.cloudwatch != null ? 1 : 0) + (s.sqs != null ? 1 : 0) +
+      (s.victoria_metrics != null ? 1 : 0) + (s.command != null ? 1 : 0) == 1
+    ])
+    error_message = "Each source must set exactly one configuration block."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.sources) :
+      (s.type == "redis" && s.redis != null) ||
+      (s.type == "bullmq" && s.bullmq != null) ||
+      (s.type == "http" && s.http != null) ||
+      (s.type == "cloudwatch" && s.cloudwatch != null) ||
+      (s.type == "sqs" && s.sqs != null) ||
+      (s.type == "victoria_metrics" && s.victoria_metrics != null) ||
+      (s.type == "command" && s.command != null)
+    ])
+    error_message = "Each source's configuration block must match its 'type' (e.g. type = \"sqs\" requires the sqs = {...} block)."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.sources) :
+      s.redis == null || try(
+        (s.redis.key != null ? 1 : 0) + (s.redis.keys != null ? 1 : 0) == 1,
+        false
+      )
+    ])
+    error_message = "Exactly one of 'key' or 'keys' must be set in each redis source."
   }
 }
 
-variable "redis" {
-  type = object({
-    url     = string
-    key     = optional(string)
-    keys    = optional(list(string))
-    command = optional(string, "LLEN")
-  })
-  default     = null
-  description = "Redis source configuration. Required when source_type = 'redis'. Use command = 'AUTO' to auto-detect key types (recommended for mixed key types like BullMQ)."
+# --- Target tracking -------------------------------------------------------
 
-  validation {
-    condition = var.redis == null || try(
-      (var.redis.key != null ? 1 : 0) + (var.redis.keys != null ? 1 : 0) == 1,
-      false
-    )
-    error_message = "Exactly one of 'key' or 'keys' must be set in the redis configuration."
-  }
-}
+variable "targets" {
+  description = <<-EOT
+    Target-tracking policies. Each references one source and computes an
+    absolute desired count, clamped to [min_replicas, max_replicas] and rounded
+    up. Set exactly one of:
+      per        = N  -> desired = ceil(metric / N)            (backlog totals, e.g. queue length)
+      target_avg = V  -> desired = ceil(current * metric / V)  (per-task averages, e.g. CPU%)
+    target_avg cannot lift a service from 0 tasks (0 * x = 0); pair it with a
+    'per' target or a scale_out_rule, or set min_replicas >= 1.
+  EOT
 
-variable "bullmq" {
-  type = object({
-    url        = string
-    queue_name = string
-    prefix     = optional(string, "bull")
-    include    = optional(list(string), ["wait", "active", "delayed"])
-  })
-  default     = null
-  description = "BullMQ source configuration. Required when source_type = 'bullmq'. Automatically uses the correct Redis command per key type (LLEN for lists, ZCARD for sorted sets)."
-}
-
-variable "http" {
-  type = object({
-    url       = string
-    method    = optional(string, "GET")
-    headers   = optional(map(string), {})
-    json_path = optional(string, ".value")
-  })
-  default     = null
-  description = "HTTP source configuration. Required when source_type = 'http'. json_path uses dot notation (e.g., '.data.count')."
-}
-
-variable "command" {
-  type = object({
-    script     = string
-    layer_arns = optional(list(string), [])
-  })
-  default     = null
-  description = "Command source configuration. Required when source_type = 'command'. WARNING: script is executed via shell — only use trusted values."
-}
-
-variable "cloudwatch" {
-  type = object({
-    namespace   = string
-    metric_name = string
-    dimensions  = optional(map(string), {})
-    statistic   = optional(string, "Average")
-    period      = optional(number, 60)
-  })
-  default     = null
-  description = "CloudWatch metric source configuration. Required when source_type = 'cloudwatch'."
-}
-
-variable "sqs" {
-  type = object({
-    queue_url         = string
-    include_in_flight = optional(bool, false)
-  })
-  default     = null
-  description = "SQS source configuration. Required when source_type = 'sqs'. Set include_in_flight = true to sum ApproximateNumberOfMessages + ApproximateNumberOfMessagesNotVisible (useful when scale-in must wait for in-flight work to finish)."
-}
-
-variable "scale_out_steps" {
   type = list(object({
-    threshold            = number
+    name                     = optional(string)
+    source                   = string
+    per                      = optional(number)
+    target_avg               = optional(number)
+    consecutive_breaches_out = optional(number, 1)
+    consecutive_breaches_in  = optional(number, 3)
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for t in var.targets :
+      (t.per != null ? 1 : 0) + (t.target_avg != null ? 1 : 0) == 1
+    ])
+    error_message = "Each target must set exactly one of 'per' or 'target_avg'."
+  }
+
+  validation {
+    condition     = alltrue([for t in var.targets : t.per == null ? true : t.per > 0])
+    error_message = "All targets with 'per' must have per > 0."
+  }
+
+  validation {
+    condition     = alltrue([for t in var.targets : t.target_avg == null ? true : t.target_avg > 0])
+    error_message = "All targets with 'target_avg' must have target_avg > 0."
+  }
+
+  validation {
+    condition     = alltrue([for t in var.targets : t.consecutive_breaches_out > 0 && t.consecutive_breaches_in > 0])
+    error_message = "All targets must have consecutive_breaches_out > 0 and consecutive_breaches_in > 0."
+  }
+
+  validation {
+    condition     = alltrue([for t in var.targets : contains(keys(var.sources), t.source)])
+    error_message = "Each target 'source' must reference a key defined in 'sources'."
+  }
+}
+
+# --- Step rules ------------------------------------------------------------
+
+variable "scale_out_rules" {
+  description = <<-EOT
+    Scale-out step rules. A rule fires when its conditions hold (match = "all"
+    for AND, "any" for OR). Each condition is { source, op, value } with op one
+    of >, >=, <, <=, ==, != against a numeric constant. Set exactly one of
+    'change' (relative, > 0) or 'exact' (absolute task count). consecutive_breaches
+    = consecutive evaluations the rule must hold before firing (default 1).
+  EOT
+
+  type = list(object({
+    name  = optional(string)
+    match = optional(string, "all")
+    conditions = list(object({
+      source = string
+      op     = string
+      value  = number
+    }))
     change               = optional(number)
     exact                = optional(number)
     consecutive_breaches = optional(number, 1)
   }))
-  description = "Scale-out step ladder. Highest matching threshold wins. Each step must set either 'change' (relative +N) or 'exact' (set to exactly N tasks). consecutive_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately)."
+  default = []
+
+  validation {
+    condition     = alltrue([for r in var.scale_out_rules : contains(["all", "any"], r.match)])
+    error_message = "Each scale_out_rule 'match' must be \"all\" or \"any\"."
+  }
+
+  validation {
+    condition     = alltrue([for r in var.scale_out_rules : length(r.conditions) > 0])
+    error_message = "Each scale_out_rule must have at least one condition."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for r in var.scale_out_rules : [
+        for c in r.conditions : contains([">", ">=", "<", "<=", "==", "!="], c.op)
+      ]
+    ]))
+    error_message = "Each condition 'op' must be one of: >, >=, <, <=, ==, !=."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for r in var.scale_out_rules : [
+        for c in r.conditions : contains(keys(var.sources), c.source)
+      ]
+    ]))
+    error_message = "Each scale_out_rule condition 'source' must reference a key defined in 'sources'."
+  }
 
   validation {
     condition = alltrue([
-      for s in var.scale_out_steps :
-      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+      for r in var.scale_out_rules :
+      (r.change != null ? 1 : 0) + (r.exact != null ? 1 : 0) == 1
     ])
-    error_message = "Each scale_out_step must set exactly one of 'change' or 'exact'."
+    error_message = "Each scale_out_rule must set exactly one of 'change' or 'exact'."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.change == null ? true : s.change > 0])
-    error_message = "All scale_out_steps with 'change' must have change > 0."
+    condition     = alltrue([for r in var.scale_out_rules : r.change == null ? true : r.change > 0])
+    error_message = "All scale_out_rules with 'change' must have change > 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.exact == null ? true : s.exact > 0])
-    error_message = "All scale_out_steps with 'exact' must have exact > 0."
+    condition     = alltrue([for r in var.scale_out_rules : r.exact == null ? true : r.exact > 0])
+    error_message = "All scale_out_rules with 'exact' must have exact > 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_out_steps : s.consecutive_breaches > 0])
-    error_message = "All scale_out_steps must have consecutive_breaches > 0."
+    condition     = alltrue([for r in var.scale_out_rules : r.consecutive_breaches > 0])
+    error_message = "All scale_out_rules must have consecutive_breaches > 0."
   }
 }
 
-variable "scale_in_steps" {
+variable "scale_in_rules" {
+  description = <<-EOT
+    Scale-in step rules. A rule fires when its conditions hold (match = "all"
+    for AND, "any" for OR). Set exactly one of 'change' (relative, < 0) or
+    'exact' (absolute task count, e.g. 0). Default consecutive_breaches = 3
+    (conservative).
+  EOT
+
   type = list(object({
-    threshold            = number
+    name  = optional(string)
+    match = optional(string, "all")
+    conditions = list(object({
+      source = string
+      op     = string
+      value  = number
+    }))
     change               = optional(number)
     exact                = optional(number)
     consecutive_breaches = optional(number, 3)
   }))
-  description = "Scale-in step ladder. Lowest matching threshold wins. Each step fires when metric <= threshold. Set either 'change' (relative, must be negative) or 'exact' (set to exactly N tasks, e.g. 0). Default consecutive_breaches = 3 (conservative)."
-  default = [
-    { threshold = 0, change = -1, consecutive_breaches = 3 }
-  ]
+  default = []
+
+  validation {
+    condition     = alltrue([for r in var.scale_in_rules : contains(["all", "any"], r.match)])
+    error_message = "Each scale_in_rule 'match' must be \"all\" or \"any\"."
+  }
+
+  validation {
+    condition     = alltrue([for r in var.scale_in_rules : length(r.conditions) > 0])
+    error_message = "Each scale_in_rule must have at least one condition."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for r in var.scale_in_rules : [
+        for c in r.conditions : contains([">", ">=", "<", "<=", "==", "!="], c.op)
+      ]
+    ]))
+    error_message = "Each condition 'op' must be one of: >, >=, <, <=, ==, !=."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for r in var.scale_in_rules : [
+        for c in r.conditions : contains(keys(var.sources), c.source)
+      ]
+    ]))
+    error_message = "Each scale_in_rule condition 'source' must reference a key defined in 'sources'."
+  }
 
   validation {
     condition = alltrue([
-      for s in var.scale_in_steps :
-      (s.change != null ? 1 : 0) + (s.exact != null ? 1 : 0) == 1
+      for r in var.scale_in_rules :
+      (r.change != null ? 1 : 0) + (r.exact != null ? 1 : 0) == 1
     ])
-    error_message = "Each scale_in_step must set exactly one of 'change' or 'exact'."
+    error_message = "Each scale_in_rule must set exactly one of 'change' or 'exact'."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_in_steps : s.change == null ? true : s.change < 0])
-    error_message = "All scale_in_steps with 'change' must have change < 0."
+    condition     = alltrue([for r in var.scale_in_rules : r.change == null ? true : r.change < 0])
+    error_message = "All scale_in_rules with 'change' must have change < 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_in_steps : s.exact == null ? true : s.exact >= 0])
-    error_message = "All scale_in_steps with 'exact' must have exact >= 0."
+    condition     = alltrue([for r in var.scale_in_rules : r.exact == null ? true : r.exact >= 0])
+    error_message = "All scale_in_rules with 'exact' must have exact >= 0."
   }
 
   validation {
-    condition     = alltrue([for s in var.scale_in_steps : s.consecutive_breaches > 0])
-    error_message = "All scale_in_steps must have consecutive_breaches > 0."
+    condition     = alltrue([for r in var.scale_in_rules : r.consecutive_breaches > 0])
+    error_message = "All scale_in_rules must have consecutive_breaches > 0."
   }
 }
 
