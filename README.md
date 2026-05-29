@@ -228,4 +228,70 @@ cd lambda && python -m pytest tests/
 MIT
 
 <!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+|------|---------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 5.0 |
+
+## Providers
+
+| Name | Version |
+|------|---------|
+| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 5.0 |
+
+## Modules
+
+| Name | Source | Version |
+|------|--------|---------|
+| <a name="module_lambda_function"></a> [lambda\_function](#module\_lambda\_function) | terraform-aws-modules/lambda/aws | ~> 7.0 |
+
+## Resources
+
+| Name | Type |
+|------|------|
+| [aws_cloudwatch_event_rule.schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
+| [aws_cloudwatch_event_target.lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
+| [aws_cloudwatch_log_group.lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_iam_role_policy.cloudwatch](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.ecs_scaling](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.sqs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.ssm](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.vpc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
+| [aws_ssm_parameter.cooldown_state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|:--------:|
+| <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | ECS cluster name | `string` | n/a | yes |
+| <a name="input_lambda_memory"></a> [lambda\_memory](#input\_lambda\_memory) | Lambda memory in MB | `number` | `256` | no |
+| <a name="input_lambda_timeout"></a> [lambda\_timeout](#input\_lambda\_timeout) | Lambda timeout in seconds | `number` | `30` | no |
+| <a name="input_log_retention"></a> [log\_retention](#input\_log\_retention) | CloudWatch log retention in days | `number` | `14` | no |
+| <a name="input_max_replicas"></a> [max\_replicas](#input\_max\_replicas) | Maximum task count | `number` | n/a | yes |
+| <a name="input_min_replicas"></a> [min\_replicas](#input\_min\_replicas) | Minimum task count (can be 0) | `number` | `0` | no |
+| <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
+| <a name="input_scale_in_rules"></a> [scale\_in\_rules](#input\_scale\_in\_rules) | Scale-in step rules. A rule fires when its conditions hold (match = "all"<br/>for AND, "any" for OR). Set exactly one of 'change' (relative, < 0) or<br/>'exact' (absolute task count, e.g. 0). Default consecutive\_breaches = 3<br/>(conservative). | <pre>list(object({<br/>    name  = optional(string)<br/>    match = optional(string, "all")<br/>    conditions = list(object({<br/>      source = string<br/>      op     = string<br/>      value  = number<br/>    }))<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 3)<br/>  }))</pre> | `[]` | no |
+| <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |
+| <a name="input_scale_out_rules"></a> [scale\_out\_rules](#input\_scale\_out\_rules) | Scale-out step rules. A rule fires when its conditions hold (match = "all"<br/>for AND, "any" for OR). Each condition is { source, op, value } with op one<br/>of >, >=, <, <=, ==, != against a numeric constant. Set exactly one of<br/>'change' (relative, > 0) or 'exact' (absolute task count). consecutive\_breaches<br/>= consecutive evaluations the rule must hold before firing (default 1). | <pre>list(object({<br/>    name  = optional(string)<br/>    match = optional(string, "all")<br/>    conditions = list(object({<br/>      source = string<br/>      op     = string<br/>      value  = number<br/>    }))<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | `[]` | no |
+| <a name="input_schedule"></a> [schedule](#input\_schedule) | EventBridge rate expression (e.g., 'rate(1 minute)', 'rate(5 minutes)') | `string` | `"rate(1 minute)"` | no |
+| <a name="input_service_name"></a> [service\_name](#input\_service\_name) | ECS service name | `string` | n/a | yes |
+| <a name="input_sources"></a> [sources](#input\_sources) | Named map of metric sources. Each entry sets `type` (redis, bullmq, http,<br/>cloudwatch, sqs, victoria\_metrics, command) and exactly one matching<br/>configuration block. Sources are referenced by their map key from `targets`<br/>and `*_rules`. | <pre>map(object({<br/>    type = string<br/><br/>    redis = optional(object({<br/>      url     = string<br/>      key     = optional(string)<br/>      keys    = optional(list(string))<br/>      command = optional(string, "LLEN")<br/>    }))<br/><br/>    bullmq = optional(object({<br/>      url        = string<br/>      queue_name = string<br/>      prefix     = optional(string, "bull")<br/>      include    = optional(list(string), ["wait", "active", "delayed"])<br/>    }))<br/><br/>    http = optional(object({<br/>      url       = string<br/>      method    = optional(string, "GET")<br/>      headers   = optional(map(string), {})<br/>      json_path = optional(string, ".value")<br/>    }))<br/><br/>    cloudwatch = optional(object({<br/>      namespace   = string<br/>      metric_name = string<br/>      dimensions  = optional(map(string), {})<br/>      statistic   = optional(string, "Average")<br/>      period      = optional(number, 60)<br/>    }))<br/><br/>    sqs = optional(object({<br/>      queue_url         = string<br/>      include_in_flight = optional(bool, false)<br/>    }))<br/><br/>    victoria_metrics = optional(object({<br/>      url      = string<br/>      query    = string<br/>      headers  = optional(map(string), {})<br/>      username = optional(string)<br/>      password = optional(string)<br/>      timeout  = optional(number, 10)<br/>    }))<br/><br/>    command = optional(object({<br/>      script     = string<br/>      layer_arns = optional(list(string), [])<br/>    }))<br/>  }))</pre> | n/a | yes |
+| <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to all resources | `map(string)` | `{}` | no |
+| <a name="input_targets"></a> [targets](#input\_targets) | Target-tracking policies. Each references one source and computes an<br/>absolute desired count, clamped to [min\_replicas, max\_replicas] and rounded<br/>up. Set exactly one of:<br/>  per        = N  -> desired = ceil(metric / N)            (backlog totals, e.g. queue length)<br/>  target\_avg = V  -> desired = ceil(current * metric / V)  (per-task averages, e.g. CPU%)<br/>target\_avg cannot lift a service from 0 tasks (0 * x = 0); pair it with a<br/>'per' target or a scale\_out\_rule, or set min\_replicas >= 1. | <pre>list(object({<br/>    name                     = optional(string)<br/>    source                   = string<br/>    per                      = optional(number)<br/>    target_avg               = optional(number)<br/>    consecutive_breaches_out = optional(number, 1)<br/>    consecutive_breaches_in  = optional(number, 3)<br/>  }))</pre> | `[]` | no |
+| <a name="input_vpc_config"></a> [vpc\_config](#input\_vpc\_config) | VPC configuration. Required for Redis or internal HTTP sources. | <pre>object({<br/>    subnet_ids         = list(string)<br/>    security_group_ids = list(string)<br/>  })</pre> | `null` | no |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| <a name="output_lambda_function_arn"></a> [lambda\_function\_arn](#output\_lambda\_function\_arn) | ARN of the autoscaler Lambda function |
+| <a name="output_lambda_function_name"></a> [lambda\_function\_name](#output\_lambda\_function\_name) | Name of the autoscaler Lambda function |
+| <a name="output_log_group_name"></a> [log\_group\_name](#output\_log\_group\_name) | CloudWatch log group name for the autoscaler |
+| <a name="output_schedule_rule_arn"></a> [schedule\_rule\_arn](#output\_schedule\_rule\_arn) | ARN of the EventBridge schedule rule |
 <!-- END_TF_DOCS -->
