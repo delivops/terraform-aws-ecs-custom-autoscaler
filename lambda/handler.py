@@ -253,13 +253,10 @@ def evaluate(config, source_values, source_errors, current_desired, state, now):
     elif action == "none" and scale_in_suppressed:
         reason = "scale-in suppressed: source read error this tick"
 
-    # Reset the fired direction's counters so the breach clock restarts after a move.
-    if action == "scale_out":
-        for p in policies:
-            new_breaches[p["key"]]["out"] = 0
-    elif action == "scale_in":
-        for p in policies:
-            new_breaches[p["key"]]["in"] = 0
+    # No post-action breach reset: a sustained breach keeps its counter and
+    # cooldown alone governs re-scaling cadence (matching AWS target tracking,
+    # where the alarm stays breaching through the cooldown rather than re-arming).
+    # The counter resets naturally above whenever a policy stops wanting a direction.
 
     new_state = dict(state)
     new_state["breaches"] = new_breaches

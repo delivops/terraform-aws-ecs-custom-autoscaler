@@ -106,7 +106,9 @@ If a source read fails mid-tick, policies that need it are skipped, scale-**out*
 
 ### Consecutive breaches & cooldowns
 
-Each policy must want a direction for `consecutive_breaches` consecutive ticks before it becomes eligible (targets default 1 out / 3 in; step rules default 1 out / 3 in). After a scaling action, further actions of the same direction are suppressed for `scale_out_cooldown` / `scale_in_cooldown` seconds. State (timestamps + per-policy breach counters) lives in one SSM parameter; `reserved_concurrent_executions = 1` keeps it race-free.
+Each policy must want a direction for `consecutive_breaches` consecutive ticks before it becomes eligible (targets default 1 out / 3 in; step rules default 1 out / 3 in). The counter tracks how many consecutive ticks a policy has *wanted* a direction and resets the moment it stops — it keeps accumulating even while the policy is held back by a cooldown or by the conservative scale-in floor, and is **not** reset after a scaling action. This mirrors AWS target tracking, where the alarm stays breaching through the cooldown rather than re-arming: a policy that has persistently wanted to move acts as soon as it is unblocked.
+
+After a scaling action, further actions of the same direction are suppressed for `scale_out_cooldown` / `scale_in_cooldown` seconds — cooldown alone governs how often a sustained breach re-scales. State (timestamps + per-policy breach counters) lives in one SSM parameter; `reserved_concurrent_executions = 1` keeps it race-free.
 
 ### Scale-from-zero caveat
 

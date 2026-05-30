@@ -229,7 +229,7 @@ def test_scale_in_cooldown_blocks():
     assert "cooldown" in out["reason"]
 
 
-# --- clamping & breach reset ----------------------------------------------
+# --- clamping & breach banking --------------------------------------------
 
 def test_clamp_to_max():
     c = cfg(max_replicas=8, targets=[{"name": "q", "source": "q", "per": 1}])
@@ -237,11 +237,57 @@ def test_clamp_to_max():
     assert out["new_desired"] == 8
 
 
-def test_breach_reset_after_scale_out():
+def test_breach_counter_banks_through_scale_out():
+    # No post-action reset: a sustained breach keeps accumulating. Cooldown
+    # (not a counter reset) governs re-scaling cadence, matching AWS target tracking.
     c = cfg(targets=[{"name": "q", "source": "q", "per": 100}])
     out = ev(c, {"q": 550}, {}, 2, {"breaches": {"q": {"out": 5}}})
     assert out["action"] == "scale_out"
-    assert out["new_state"]["breaches"]["q"]["out"] == 0
+    assert out["new_state"]["breaches"]["q"]["out"] == 6
+
+
+def test_breach_banks_while_blocked_by_holding_target():
+    # A scale-in rule blocked by a holding target still accumulates breaches
+    # (it persistently wants to scale in); the conservative floor does not
+    # freeze the counter.
+    c = cfg(
+        targets=[{"name": "cpu", "source": "cpu", "target_avg": 70}],
+        scale_in_rules=[{
+            "name": "drain", "match": "all",
+            "conditions": [{"source": "q", "op": "<=", "value": 0}],
+            "change": -3, "consecutive_breaches": 3,
+        }],
+    )
+    # cpu at target -> target holds the line at current=5; queue empty -> drain wants in.
+    out = ev(c, {"cpu": 70, "q": 0}, {}, 5, {"breaches": {"drain": {"in": 2}}})
+    assert out["action"] == "none"                          # held by satisfied cpu target
+    assert out["new_state"]["breaches"]["drain"]["in"] == 3  # banked, not frozen
+
+
+def test_banked_breach_fires_immediately_when_unblocked():
+    # Once the holding target relaxes, a scale-in rule that banked its breaches
+    # while blocked acts on the next tick (AWS: the alarm was already breaching).
+    c = cfg(
+        targets=[{"name": "cpu", "source": "cpu", "target_avg": 70}],
+        scale_in_rules=[{
+            "name": "drain", "match": "all",
+            "conditions": [{"source": "q", "op": "<=", "value": 0}],
+            "change": -3, "consecutive_breaches": 3,
+        }],
+    )
+    # cpu now low -> target wants in too (no longer holds at 5); drain already banked.
+    out = ev(c, {"cpu": 14, "q": 0}, {}, 5,
+             {"breaches": {"drain": {"in": 3}, "cpu": {"in": 3}}})
+    assert out["action"] == "scale_in"
+    assert out["new_desired"] == 2  # drain floor (5-3) is the highest level still wanted
+
+
+def test_scale_out_cooldown_boundary_allows():
+    # _cooldown_expired uses >=, so at exactly the cooldown elapsed the action is allowed.
+    c = cfg(targets=[{"name": "q", "source": "q", "per": 100}])
+    exactly = (NOW - timedelta(seconds=60)).isoformat()
+    out = ev(c, {"q": 550}, {}, 2, {"last_scale_out": exactly})
+    assert out["action"] == "scale_out"
 
 
 def test_noop_keeps_desired():
