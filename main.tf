@@ -40,9 +40,16 @@ locals {
   }
 
   # IAM helpers
+  # Derive the ARN from the queue URL itself (region/account/name), not from the
+  # caller's identity, so cross-account/cross-region queues get a matching grant.
+  # URL: https://sqs.<region>.amazonaws.com/<account-id>/<queue-name>
   sqs_queue_arns = [
-    for s in values(var.sources) :
-    "arn:aws:sqs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:${element(split("/", s.sqs.queue_url), length(split("/", s.sqs.queue_url)) - 1)}"
+    for s in values(var.sources) : format(
+      "arn:aws:sqs:%s:%s:%s",
+      split(".", split("/", s.sqs.queue_url)[2])[1], # region, from the host
+      split("/", s.sqs.queue_url)[3],                # account id
+      split("/", s.sqs.queue_url)[4],                # queue name
+    )
     if s.type == "sqs"
   ]
 
@@ -138,7 +145,7 @@ resource "aws_iam_role_policy" "ecs_scaling" {
         "ecs:DescribeServices",
         "ecs:UpdateService",
       ]
-      Resource = "arn:aws:ecs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/${var.service_name}"
+      Resource = "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/${var.service_name}"
     }]
   })
 }
@@ -173,7 +180,7 @@ resource "aws_iam_role_policy" "ssm" {
         "ssm:GetParameter",
         "ssm:PutParameter",
       ]
-      Resource = "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_path}"
+      Resource = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_path}"
     }]
   })
 }
