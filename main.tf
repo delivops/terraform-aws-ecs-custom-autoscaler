@@ -145,7 +145,7 @@ resource "aws_iam_role_policy" "ecs_scaling" {
         "ecs:DescribeServices",
         "ecs:UpdateService",
       ]
-      Resource = "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/${var.service_name}"
+      Resource = "arn:aws:ecs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/${var.service_name}"
     }]
   })
 }
@@ -180,7 +180,7 @@ resource "aws_iam_role_policy" "ssm" {
         "ssm:GetParameter",
         "ssm:PutParameter",
       ]
-      Resource = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_path}"
+      Resource = "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_path}"
     }]
   })
 }
