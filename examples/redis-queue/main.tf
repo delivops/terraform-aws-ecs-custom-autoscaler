@@ -2,6 +2,9 @@ provider "aws" {
   region = "us-east-2"
 }
 
+# Single Redis source driven by a target ("1 replica per 20 pending jobs"),
+# with an emergency step rule that jumps to max on a large backlog.
+
 module "queue_autoscaler" {
   source = "../../"
 
@@ -11,23 +14,27 @@ module "queue_autoscaler" {
   max_replicas = 10
   schedule     = "rate(1 minute)"
 
-  source_type = "redis"
-  redis = {
-    url     = "redis://my-redis.example.cache.amazonaws.com:6379/0"
-    key     = "myapp:jobs:pending"
-    command = "LLEN"
+  sources = {
+    jobs = {
+      type = "redis"
+      redis = {
+        url     = "redis://my-redis.example.cache.amazonaws.com:6379/0"
+        key     = "myapp:jobs:pending"
+        command = "LLEN"
+      }
+    }
   }
 
-  scale_out_steps = [
-    { threshold = 5, change = 1 },
-    { threshold = 10, change = 2 },
-    { threshold = 20, change = 3 },
-    { threshold = 50, exact = 10 }, # emergency: jump to max capacity
+  targets = [
+    { name = "jobs_per_worker", source = "jobs", per = 20 },
   ]
 
-  scale_in_steps = [
-    { threshold = 5, change = -1 },
-    { threshold = 0, exact = 0, consecutive_breaches = 5 },
+  scale_out_rules = [
+    {
+      name       = "emergency"
+      conditions = [{ source = "jobs", op = ">", value = 500 }]
+      exact      = 10
+    },
   ]
 
   scale_in_cooldown = 600

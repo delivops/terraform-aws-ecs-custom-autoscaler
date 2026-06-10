@@ -2,242 +2,177 @@
 
 # terraform-aws-ecs-custom-autoscaler
 
-A Terraform module that creates a Lambda-based ECS autoscaler for metrics that live outside the built-in AppAutoScaling options — Redis queue depth, HTTP endpoint values, CloudWatch custom metrics, or any shell command.
+A Terraform module that creates a Lambda-based ECS autoscaler for metrics that live outside the built-in AppAutoScaling options — Redis/BullMQ queue depth, HTTP endpoints, CloudWatch metrics, SQS, Victoria Metrics, or any shell command.
 
-The Lambda runs on a schedule, reads a metric from a configurable source, evaluates a step ladder, and directly calls `ecs:UpdateService` to adjust desired count. No CloudWatch alarms or AppAutoScaling policies in the middle.
+The Lambda runs on a schedule, reads one or more **named sources**, evaluates a set of **policies** (target-tracking and/or boolean step rules), reconciles them into a single desired count, and calls `ecs:UpdateService` directly. No CloudWatch alarms or AppAutoScaling policies in the middle.
+
+> **v2 is a breaking change.** The single `source_type` + `scale_out_steps`/`scale_in_steps` schema has been replaced by a `sources` map plus `targets` / `scale_out_rules` / `scale_in_rules`. See [Migrating from v1](#migrating-from-v1). Pin `~> 1.0` if you are not ready to migrate.
 
 ## Usage with terraform-aws-ecs-service
 
-This module is designed as a companion to [terraform-aws-ecs-service](https://github.com/delivops/terraform-aws-ecs-service) for cases where built-in autoscaling options (CPU, memory, SQS, scheduled) are not sufficient.
+This module is a companion to [terraform-aws-ecs-service](https://github.com/delivops/terraform-aws-ecs-service) for cases where built-in autoscaling (CPU, memory, SQS, scheduled) is not sufficient.
 
-> **Important**: This module bypasses AppAutoScaling entirely and calls `ecs:UpdateService` directly. When using this module, disable all built-in autoscaling in the ecs-service module to prevent conflicts.
+> **Important**: This module bypasses AppAutoScaling and calls `ecs:UpdateService` directly. Disable all built-in autoscaling on the service to prevent conflicts.
 
 ## Usage
 
 ```hcl
 module "queue_autoscaler" {
   source  = "delivops/ecs-custom-autoscaler/aws"
-  version = "1.0.0"
+  version = "2.0.0"
 
   cluster_name = "prod"
-  service_name = "queue_worker"
-  min_replicas = 0
-  max_replicas = 10
-  schedule     = "rate(1 minute)"
+  service_name = "order_processor"
+  min_replicas = 1
+  max_replicas = 50
 
-  source_type = "redis"
-  redis = {
-    url     = "redis://my-redis.xxx.cache.amazonaws.com:6379/0"
-    key     = "myapp:jobs:pending"
-    command = "LLEN"
+  sources = {
+    orders_q = {
+      type = "sqs"
+      sqs  = { queue_url = "https://sqs.us-east-2.amazonaws.com/123456789012/orders" }
+    }
+    cpu = {
+      type = "cloudwatch"
+      cloudwatch = {
+        namespace   = "AWS/ECS"
+        metric_name = "CPUUtilization"
+        dimensions  = { ClusterName = "prod", ServiceName = "order_processor" }
+      }
+    }
   }
 
-  scale_out_steps = [
-    { threshold = 5,   change = 1 },
-    { threshold = 10,  change = 2 },
-    { threshold = 20,  change = 3 },
-    { threshold = 50,  change = 10 },
+  # Steady-state capacity: the most demanding target wins.
+  targets = [
+    { name = "orders_ratio", source = "orders_q", per = 100 },     # 1 replica / 100 messages
+    { name = "cpu_target",   source = "cpu",      target_avg = 70 }, # keep avg CPU ~70%
   ]
 
-  scale_in_steps = [
-    { threshold = 5, change = -1 },
-    { threshold = 0, exact = 0, consecutive_breaches = 5 },
+  # Emergency burst when BOTH the queue is deep AND CPU is hot.
+  scale_out_rules = [
+    {
+      name  = "burst"
+      match = "all"
+      conditions = [
+        { source = "orders_q", op = ">", value = 5000 },
+        { source = "cpu",      op = ">", value = 70 },
+      ]
+      change = 5
+    },
   ]
 
-  scale_in_cooldown = 600
-
-  vpc_config = {
-    subnet_ids         = var.private_subnet_ids
-    security_group_ids = [aws_security_group.lambda_sg.id]
-  }
+  scale_out_cooldown = 60
+  scale_in_cooldown  = 600
 }
 ```
 
-## Metric Sources
+## Concepts
 
-### Redis
+### Sources
 
-Connects to Redis and runs a command on a key. Supports `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`, `AUTO`.
+`sources` is a named map. Each entry has a `type` and exactly one matching config block. Sources are referenced by their map key from `targets` and `*_rules`, and each referenced source is read **once** per tick.
 
-Use `command = "AUTO"` to auto-detect the Redis data type of each key and use the appropriate command (e.g., `LLEN` for lists, `ZCARD` for sorted sets). This is recommended when querying keys with mixed data types.
+| Type | Returns | Notes |
+|---|---|---|
+| `redis` | key length / value | `LLEN`, `GET`, `ZCARD`, `SCARD`, `HLEN`, `AUTO`; single `key` or summed `keys` |
+| `bullmq` | total jobs | sums `wait`/`active`/`delayed` by default |
+| `http` | numeric JSON field | dot-path extraction (e.g. `.data.count`) |
+| `cloudwatch` | latest datapoint | any namespace/metric/statistic |
+| `sqs` | message count | optional `include_in_flight` |
+| `victoria_metrics` | PromQL/MetricsQL result | scalar, or summed vector/matrix |
+| `command` | stdout as number | escape hatch; runs via shell — trusted input only |
 
-```hcl
-source_type = "redis"
-redis = {
-  url     = "redis://my-redis:6379/0"
-  key     = "myapp:jobs:pending"
-  command = "LLEN"
-}
-```
+### Policies
 
-#### Multi-key
+A policy computes a candidate desired count from sources. Two kinds, freely combinable in one autoscaler:
 
-Use `keys` to sum metrics across multiple Redis keys. Use `command = "AUTO"` when keys have mixed data types (lists, sorted sets, etc.):
+**Targets** (bidirectional, absolute):
 
-```hcl
-source_type = "redis"
-redis = {
-  url  = "redis://my-redis:6379/0"
-  keys = [
-    "myapp:queue:pending",
-    "myapp:queue:retry",
-  ]
-  command = "LLEN"
-}
-```
+- `per = N` → `desired = ceil(metric / N)`. For backlog totals (queue length). Independent of current count.
+- `target_avg = V` → `desired = ceil(current_desired * metric / V)`. The AWS target-tracking formula, for per-task averages (CPU%).
 
-### BullMQ
+**Step rules** (`scale_out_rules` / `scale_in_rules`): a rule fires when its `conditions` hold — `match = "all"` (AND) or `"any"` (OR). Each condition is `{ source, op, value }` with `op` one of `>`, `>=`, `<`, `<=`, `==`, `!=`. A firing rule proposes `current + change` (relative) or `exact` (absolute).
 
-Dedicated source type for [BullMQ](https://docs.bullmq.io/) queues. Automatically constructs the correct Redis keys and uses the right command per key type (`LLEN` for lists like `wait`/`active`, `ZCARD` for sorted sets like `delayed`).
+### Reconciliation
 
-```hcl
-source_type = "bullmq"
-bullmq = {
-  url        = "redis://my-redis:6379/0"
-  queue_name = "my-jobs"
-}
-```
+Every tick, each policy proposes a candidate. They are combined as:
 
-By default, it sums `wait`, `active`, and `delayed` states. You can customize which states to include and the key prefix:
+1. **Scale-out wins, max takes it.** If any eligible policy wants more than the current count, scale out to the **highest** candidate.
+2. **Otherwise, scale in conservatively.** Scale in only to the **highest** level any target or scale-in rule still wants. A target satisfied at the current count (or wanting more) **holds the line** and blocks scale-in. You never starve a hot metric to satisfy an idle one.
+3. Everything is clamped to `[min_replicas, max_replicas]` and rounded up.
 
-```hcl
-bullmq = {
-  url        = "redis://my-redis:6379/0"
-  queue_name = "my-jobs"
-  prefix     = "bull"                                     # default
-  include    = ["wait", "active", "delayed", "paused"]    # default: ["wait", "active", "delayed"]
-}
-```
+### Source failure is asymmetric
 
-Supported states: `wait`, `active`, `delayed`, `paused` (lists), `completed`, `failed` (sorted sets).
+If a source read fails mid-tick, policies that need it are skipped, scale-**out** from healthy policies is still allowed, and scale-**in is suppressed for that tick** (the missing source might have been the one holding capacity up). The log records `source_errors` and `scale_in_suppressed`.
 
-### HTTP
+### Consecutive breaches & cooldowns
 
-Makes an HTTP request and extracts a numeric value from the JSON response using a dot-path expression.
+Each policy must want a direction for `consecutive_breaches` consecutive ticks before it becomes eligible (targets default 1 out / 3 in; step rules default 1 out / 3 in). The counter tracks how many consecutive ticks a policy has *wanted* a direction and resets the moment it stops — it keeps accumulating even while the policy is held back by a cooldown or by the conservative scale-in floor, and is **not** reset after a scaling action. This mirrors AWS target tracking, where the alarm stays breaching through the cooldown rather than re-arming: a policy that has persistently wanted to move acts as soon as it is unblocked.
+
+After a scaling action, further actions of the same direction are suppressed for `scale_out_cooldown` / `scale_in_cooldown` seconds — cooldown alone governs how often a sustained breach re-scales. State (timestamps + per-policy breach counters) lives in one SSM parameter; `reserved_concurrent_executions = 1` keeps it race-free.
+
+### Scale-from-zero caveat
+
+`target_avg` cannot lift a service from 0 tasks (`ceil(0 * metric / V) = 0`), and utilization metrics usually report nothing at 0 tasks. To support scale-to-zero, pair it with a `per` target or a `scale_out_rule` (both work from 0), or set `min_replicas >= 1`. See the `scale_to_zero` module in `examples/complete`.
+
+## Source configuration reference
 
 ```hcl
-source_type = "http"
-http = {
-  url     = "https://api.example.com/metrics"
-  method  = "GET"
-  headers = { "Authorization" = "Bearer xxx" }
-  json_path = ".data.pending_count"
-}
+# Redis — LLEN/GET/ZCARD/SCARD/HLEN/AUTO; single key or summed keys
+redis = { url = "redis://host:6379/0", key = "myapp:jobs", command = "LLEN" }
+
+# BullMQ — sums wait/active/delayed by default
+bullmq = { url = "redis://host:6379/0", queue_name = "my-jobs" }
+
+# HTTP — dot-path extraction from JSON
+http = { url = "https://api/metrics", json_path = ".data.pending", headers = { Authorization = "Bearer x" } }
+
+# CloudWatch
+cloudwatch = { namespace = "AWS/SQS", metric_name = "ApproximateNumberOfMessagesVisible", dimensions = { QueueName = "q" } }
+
+# SQS — set include_in_flight to also count in-flight messages
+sqs = { queue_url = "https://sqs.../my-queue", include_in_flight = true }
+
+# Victoria Metrics — PromQL/MetricsQL; vector/matrix results are summed
+victoria_metrics = { url = "http://vmselect:8481/select/0/prometheus", query = "sum(rate(http_requests_total[1m]))" }
+
+# Command — escape hatch, runs via shell
+command = { script = "redis-cli -u $REDIS_URL LLEN mykey", layer_arns = [] }
 ```
 
-### CloudWatch
+For `target_avg`, make sure the source returns a per-task **average** (e.g. CloudWatch `Average`); for `per`, make sure it returns a **total** (e.g. queue length).
 
-Reads a metric from CloudWatch. Useful for AWS-native metrics (SQS queue depth, DynamoDB consumed capacity, custom metrics).
+## Migrating from v1
 
-```hcl
-source_type = "cloudwatch"
-cloudwatch = {
-  namespace   = "AWS/SQS"
-  metric_name = "ApproximateNumberOfMessagesVisible"
-  dimensions  = { "QueueName" = "my-queue" }
-  statistic   = "Average"
-  period      = 60
-}
-```
+| v1 | v2 |
+|---|---|
+| `source_type = "sqs"` + `sqs = {...}` | `sources = { myq = { type = "sqs", sqs = {...} } }` |
+| `scale_out_steps = [{ threshold = 100, change = 3 }]` | `scale_out_rules = [{ conditions = [{ source = "myq", op = ">", value = 100 }], change = 3 }]` |
+| `scale_in_steps = [{ threshold = 0, exact = 0 }]` | `scale_in_rules = [{ conditions = [{ source = "myq", op = "<=", value = 0 }], exact = 0 }]` |
+| (threshold ladder used as a ratio) | often simpler as a `targets = [{ source = "myq", per = N }]` |
 
-### SQS
+`scale_out_cooldown`, `scale_in_cooldown`, `min_replicas`, `max_replicas`, `vpc_config`, `schedule`, and the source config blocks are unchanged in shape.
 
-Reads the approximate number of messages directly from an SQS queue (real-time, no CloudWatch delay).
+## How It Works
 
-```hcl
-source_type = "sqs"
-sqs = {
-  queue_url = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
-}
-```
-
-For scale-to-zero workers with long-running message processing, set `include_in_flight = true` to also count messages currently being processed (sums `ApproximateNumberOfMessages` + `ApproximateNumberOfMessagesNotVisible`):
-
-```hcl
-sqs = {
-  queue_url         = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
-  include_in_flight = true
-}
-```
-
-### Command
-
-Escape hatch: runs any shell command and parses stdout as a number. Supports custom Lambda layers.
-
-```hcl
-source_type = "command"
-command = {
-  script     = "redis-cli -u $REDIS_URL LLEN mykey"
-  layer_arns = ["arn:aws:lambda:...:layer:redis-tools:1"]
-}
-```
-
-## Scaling Behavior
-
-### Step evaluation
-
-Both scale-out and scale-in support multi-step thresholds with `change` (relative) or `exact` (absolute) capacity.
-
-**Scale-out**: steps are sorted by threshold descending; the **highest** matching threshold wins. For example, if metric = 75 and steps have thresholds at 5, 10, 20, 50 — the `threshold = 50` step fires.
-
-**Scale-in**: steps are sorted by threshold ascending; the **lowest** matching threshold wins. For example, if metric = 0 and steps have thresholds at 0, 5 — the `threshold = 0` step fires (most aggressive). If metric = 3, the `threshold = 5` step fires (gentler).
-
-Each step must set either `change` (adjust by N tasks) or `exact` (set desired count to exactly N tasks). Use `exact` for scenarios like scaling to zero when idle or jumping to a specific capacity.
-
-### Consecutive breaches (`consecutive_breaches`)
-
-Similar to CloudWatch alarm `evaluation_periods`, each step supports `consecutive_breaches` — the metric must breach the threshold for N consecutive evaluations before scaling triggers.
-
-```hcl
-scale_out_steps = [
-  { threshold = 5,  change = 1, consecutive_breaches = 1 },  # react immediately
-  { threshold = 50, change = 10 },                            # default: 1 (immediate)
-  { threshold = 100, exact = 10 },                            # jump to exactly 10 tasks
-]
-
-scale_in_steps = [
-  { threshold = 5, change = -1 },                              # gentle: remove 1 task
-  { threshold = 0, exact = 0, consecutive_breaches = 5 },      # aggressive: scale to zero
-]
-```
-
-**Defaults**: scale-out `consecutive_breaches` = `1` (react fast), scale-in = `3` (conservative). This mirrors the asymmetric behavior of built-in ECS autoscaling — aggressive scale-out, cautious scale-in.
-
-Breach counters are tracked per threshold in SSM alongside cooldown timestamps. If the metric moves away from a threshold before reaching the required breaches, the counter resets.
-
-### Cooldowns
-
-After a scaling action occurs, further actions of the same type are suppressed for `scale_out_cooldown` / `scale_in_cooldown` seconds. The cooldown timer starts when the ECS UpdateService call is made.
-
-### How It Works
-
-1. **Read metric** from the configured source (redis/bullmq/http/cloudwatch/sqs/command)
-2. **Describe ECS service** to get current desired count
-3. **Read state** from SSM Parameter Store (cooldown timestamps + breach counters)
-4. **Evaluate**:
-   - Find the highest matching scale-out threshold
-   - If matched AND cooldown expired: increment breach counter; if breaches >= `consecutive_breaches`, scale out
-   - If no scale-out match: find the lowest matching scale-in threshold; if matched AND cooldown expired: increment breach counter; if breaches >= `consecutive_breaches`, scale in
-   - Reset breach counters for conditions no longer met
-5. **Update ECS service** and persist new state to SSM
-6. **Log** structured JSON with the decision (including breach counts)
-
-Race conditions are prevented by setting Lambda reserved concurrency to 1.
+1. Read each referenced source once; record failures.
+2. Describe the ECS service for the current desired count.
+3. Read state (cooldown timestamps + breach counters) from SSM.
+4. Evaluate every policy → candidate, gate by consecutive breaches, reconcile (scale-out max-wins; conservative scale-in; scale-in suppressed on source error).
+5. `UpdateService` if the desired count changed; persist new state.
+6. Log structured JSON: per-source values, per-policy candidates/eligibility, the decision, and the reason.
 
 ## Resources Created
 
 | Resource | Purpose |
 |---|---|
 | `aws_lambda_function` | The autoscaler Lambda |
-| `aws_lambda_layer_version` | Python dependencies (redis, requests) |
-| `aws_iam_role` + policies | Execution role with least-privilege policies |
-| `aws_cloudwatch_event_rule` | EventBridge schedule |
-| `aws_cloudwatch_event_target` | Connect schedule to Lambda |
-| `aws_lambda_permission` | Allow EventBridge to invoke Lambda |
+| `aws_iam_role` + policies | Execution role (ECS, logs, SSM, and per-source-type policies) |
+| `aws_cloudwatch_event_rule` / `_target` | EventBridge schedule → Lambda |
+| `aws_lambda_permission` | Allow EventBridge to invoke |
 | `aws_cloudwatch_log_group` | Lambda logs with retention |
-| `aws_ssm_parameter` | Cooldown state storage |
+| `aws_ssm_parameter` | Scaling state storage |
 
-## Variables
+## Key Variables
 
 | Name | Type | Default | Description |
 |---|---|---|---|
@@ -246,15 +181,10 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `min_replicas` | `number` | `0` | Minimum task count |
 | `max_replicas` | `number` | - | Maximum task count |
 | `schedule` | `string` | `"rate(1 minute)"` | EventBridge rate expression |
-| `source_type` | `string` | - | `"redis"`, `"bullmq"`, `"http"`, `"cloudwatch"`, `"sqs"`, or `"command"` |
-| `redis` | `object` | `null` | Redis source config |
-| `bullmq` | `object` | `null` | BullMQ source config |
-| `http` | `object` | `null` | HTTP source config |
-| `cloudwatch` | `object` | `null` | CloudWatch metric source config |
-| `sqs` | `object` | `null` | SQS source config |
-| `command` | `object` | `null` | Command source config |
-| `scale_out_steps` | `list(object)` | - | Step ladder (threshold + change) |
-| `scale_in_steps` | `list(object)` | `[{threshold=0, change=-1}]` | Scale-in step ladder (threshold + change/exact) |
+| `sources` | `map(object)` | - | Named metric sources (`type` + matching config block) |
+| `targets` | `list(object)` | `[]` | Target-tracking policies (`per` or `target_avg`) |
+| `scale_out_rules` | `list(object)` | `[]` | Boolean step rules that scale out |
+| `scale_in_rules` | `list(object)` | `[]` | Boolean step rules that scale in |
 | `scale_out_cooldown` | `number` | `60` | Seconds between scale-out actions |
 | `scale_in_cooldown` | `number` | `600` | Seconds between scale-in actions |
 | `vpc_config` | `object` | `null` | VPC subnet and security group IDs |
@@ -262,6 +192,8 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `lambda_memory` | `number` | `256` | Lambda memory (MB) |
 | `log_retention` | `number` | `14` | CloudWatch log retention (days) |
 | `tags` | `map(string)` | `{}` | Tags for all resources |
+
+At least one of `targets` / `scale_out_rules` / `scale_in_rules` must be set.
 
 ## Outputs
 
@@ -272,9 +204,17 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 | `log_group_name` | CloudWatch log group name |
 | `schedule_rule_arn` | EventBridge schedule rule ARN |
 
+## Testing
+
+Pure decision logic lives in `evaluate()` (no AWS calls) and is unit-tested:
+
+```bash
+cd lambda && python -m pytest tests/
+```
+
 ## Cost
 
-~$0.07/month per autoscaled service. Even 100 instances cost less than $7/month. This is ~20x cheaper than the CloudWatch alarms + custom metrics approach.
+~$0.07/month per autoscaled service. Even 100 instances cost less than $7/month — ~20x cheaper than the CloudWatch alarms + custom metrics approach.
 
 ## Requirements
 
@@ -282,10 +222,8 @@ Race conditions are prevented by setting Lambda reserved concurrency to 1.
 |---|---|
 | terraform | >= 1.3 |
 | aws | >= 5.0 |
-| archive | >= 2.0 |
-| null | >= 3.0 |
 
-`pip` must be available on the machine running `terraform apply` (used to install Lambda layer dependencies).
+`pip` must be available on the machine running `terraform apply` (used to install Lambda dependencies).
 
 ## License
 
@@ -333,26 +271,21 @@ MIT
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_bullmq"></a> [bullmq](#input\_bullmq) | BullMQ source configuration. Required when source\_type = 'bullmq'. Automatically uses the correct Redis command per key type (LLEN for lists, ZCARD for sorted sets). | <pre>object({<br/>    url        = string<br/>    queue_name = string<br/>    prefix     = optional(string, "bull")<br/>    include    = optional(list(string), ["wait", "active", "delayed"])<br/>  })</pre> | `null` | no |
-| <a name="input_cloudwatch"></a> [cloudwatch](#input\_cloudwatch) | CloudWatch metric source configuration. Required when source\_type = 'cloudwatch'. | <pre>object({<br/>    namespace   = string<br/>    metric_name = string<br/>    dimensions  = optional(map(string), {})<br/>    statistic   = optional(string, "Average")<br/>    period      = optional(number, 60)<br/>  })</pre> | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | ECS cluster name | `string` | n/a | yes |
-| <a name="input_command"></a> [command](#input\_command) | Command source configuration. Required when source\_type = 'command'. WARNING: script is executed via shell — only use trusted values. | <pre>object({<br/>    script     = string<br/>    layer_arns = optional(list(string), [])<br/>  })</pre> | `null` | no |
-| <a name="input_http"></a> [http](#input\_http) | HTTP source configuration. Required when source\_type = 'http'. json\_path uses dot notation (e.g., '.data.count'). | <pre>object({<br/>    url       = string<br/>    method    = optional(string, "GET")<br/>    headers   = optional(map(string), {})<br/>    json_path = optional(string, ".value")<br/>  })</pre> | `null` | no |
 | <a name="input_lambda_memory"></a> [lambda\_memory](#input\_lambda\_memory) | Lambda memory in MB | `number` | `256` | no |
 | <a name="input_lambda_timeout"></a> [lambda\_timeout](#input\_lambda\_timeout) | Lambda timeout in seconds | `number` | `30` | no |
 | <a name="input_log_retention"></a> [log\_retention](#input\_log\_retention) | CloudWatch log retention in days | `number` | `14` | no |
 | <a name="input_max_replicas"></a> [max\_replicas](#input\_max\_replicas) | Maximum task count | `number` | n/a | yes |
 | <a name="input_min_replicas"></a> [min\_replicas](#input\_min\_replicas) | Minimum task count (can be 0) | `number` | `0` | no |
-| <a name="input_redis"></a> [redis](#input\_redis) | Redis source configuration. Required when source\_type = 'redis'. Use command = 'AUTO' to auto-detect key types (recommended for mixed key types like BullMQ). | <pre>object({<br/>    url     = string<br/>    key     = optional(string)<br/>    keys    = optional(list(string))<br/>    command = optional(string, "LLEN")<br/>  })</pre> | `null` | no |
 | <a name="input_scale_in_cooldown"></a> [scale\_in\_cooldown](#input\_scale\_in\_cooldown) | Minimum seconds between scale-in actions | `number` | `600` | no |
-| <a name="input_scale_in_steps"></a> [scale\_in\_steps](#input\_scale\_in\_steps) | Scale-in step ladder. Lowest matching threshold wins. Each step fires when metric <= threshold. Set either 'change' (relative, must be negative) or 'exact' (set to exactly N tasks, e.g. 0). Default consecutive\_breaches = 3 (conservative). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 3)<br/>  }))</pre> | <pre>[<br/>  {<br/>    "change": -1,<br/>    "consecutive_breaches": 3,<br/>    "threshold": 0<br/>  }<br/>]</pre> | no |
+| <a name="input_scale_in_rules"></a> [scale\_in\_rules](#input\_scale\_in\_rules) | Scale-in step rules. A rule fires when its conditions hold (match = "all"<br/>for AND, "any" for OR). Set exactly one of 'change' (relative, < 0) or<br/>'exact' (absolute task count, e.g. 0). Default consecutive\_breaches = 3<br/>(conservative). | <pre>list(object({<br/>    name  = optional(string)<br/>    match = optional(string, "all")<br/>    conditions = list(object({<br/>      source = string<br/>      op     = string<br/>      value  = number<br/>    }))<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 3)<br/>  }))</pre> | `[]` | no |
 | <a name="input_scale_out_cooldown"></a> [scale\_out\_cooldown](#input\_scale\_out\_cooldown) | Minimum seconds between scale-out actions | `number` | `60` | no |
-| <a name="input_scale_out_steps"></a> [scale\_out\_steps](#input\_scale\_out\_steps) | Scale-out step ladder. Highest matching threshold wins. Each step must set either 'change' (relative +N) or 'exact' (set to exactly N tasks). consecutive\_breaches = number of consecutive evaluations the metric must exceed the threshold before scaling (default: 1, react immediately). | <pre>list(object({<br/>    threshold            = number<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | n/a | yes |
+| <a name="input_scale_out_rules"></a> [scale\_out\_rules](#input\_scale\_out\_rules) | Scale-out step rules. A rule fires when its conditions hold (match = "all"<br/>for AND, "any" for OR). Each condition is { source, op, value } with op one<br/>of >, >=, <, <=, ==, != against a numeric constant. Set exactly one of<br/>'change' (relative, > 0) or 'exact' (absolute task count). consecutive\_breaches<br/>= consecutive evaluations the rule must hold before firing (default 1). | <pre>list(object({<br/>    name  = optional(string)<br/>    match = optional(string, "all")<br/>    conditions = list(object({<br/>      source = string<br/>      op     = string<br/>      value  = number<br/>    }))<br/>    change               = optional(number)<br/>    exact                = optional(number)<br/>    consecutive_breaches = optional(number, 1)<br/>  }))</pre> | `[]` | no |
 | <a name="input_schedule"></a> [schedule](#input\_schedule) | EventBridge rate expression (e.g., 'rate(1 minute)', 'rate(5 minutes)') | `string` | `"rate(1 minute)"` | no |
 | <a name="input_service_name"></a> [service\_name](#input\_service\_name) | ECS service name | `string` | n/a | yes |
-| <a name="input_source_type"></a> [source\_type](#input\_source\_type) | Metric source type: 'redis', 'http', 'cloudwatch', 'sqs', or 'command' | `string` | n/a | yes |
-| <a name="input_sqs"></a> [sqs](#input\_sqs) | SQS source configuration. Required when source\_type = 'sqs'. Set include\_in\_flight = true to sum ApproximateNumberOfMessages + ApproximateNumberOfMessagesNotVisible (useful when scale-in must wait for in-flight work to finish). | <pre>object({<br/>    queue_url         = string<br/>    include_in_flight = optional(bool, false)<br/>  })</pre> | `null` | no |
+| <a name="input_sources"></a> [sources](#input\_sources) | Named map of metric sources. Each entry sets `type` (redis, bullmq, http,<br/>cloudwatch, sqs, victoria\_metrics, command) and exactly one matching<br/>configuration block. Sources are referenced by their map key from `targets`<br/>and `*_rules`. | <pre>map(object({<br/>    type = string<br/><br/>    redis = optional(object({<br/>      url     = string<br/>      key     = optional(string)<br/>      keys    = optional(list(string))<br/>      command = optional(string, "LLEN")<br/>    }))<br/><br/>    bullmq = optional(object({<br/>      url        = string<br/>      queue_name = string<br/>      prefix     = optional(string, "bull")<br/>      include    = optional(list(string), ["wait", "active", "delayed"])<br/>    }))<br/><br/>    http = optional(object({<br/>      url       = string<br/>      method    = optional(string, "GET")<br/>      headers   = optional(map(string), {})<br/>      json_path = optional(string, ".value")<br/>    }))<br/><br/>    cloudwatch = optional(object({<br/>      namespace   = string<br/>      metric_name = string<br/>      dimensions  = optional(map(string), {})<br/>      statistic   = optional(string, "Average")<br/>      period      = optional(number, 60)<br/>    }))<br/><br/>    sqs = optional(object({<br/>      queue_url         = string<br/>      include_in_flight = optional(bool, false)<br/>    }))<br/><br/>    victoria_metrics = optional(object({<br/>      url      = string<br/>      query    = string<br/>      headers  = optional(map(string), {})<br/>      username = optional(string)<br/>      password = optional(string)<br/>      timeout  = optional(number, 10)<br/>    }))<br/><br/>    command = optional(object({<br/>      script     = string<br/>      layer_arns = optional(list(string), [])<br/>    }))<br/>  }))</pre> | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to all resources | `map(string)` | `{}` | no |
+| <a name="input_targets"></a> [targets](#input\_targets) | Target-tracking policies. Each references one source and computes an<br/>absolute desired count, clamped to [min\_replicas, max\_replicas] and rounded<br/>up. Set exactly one of:<br/>  per        = N  -> desired = ceil(metric / N)            (backlog totals, e.g. queue length)<br/>  target\_avg = V  -> desired = ceil(current * metric / V)  (per-task averages, e.g. CPU%)<br/>target\_avg cannot lift a service from 0 tasks (0 * x = 0); pair it with a<br/>'per' target or a scale\_out\_rule, or set min\_replicas >= 1. | <pre>list(object({<br/>    name                     = optional(string)<br/>    source                   = string<br/>    per                      = optional(number)<br/>    target_avg               = optional(number)<br/>    consecutive_breaches_out = optional(number, 1)<br/>    consecutive_breaches_in  = optional(number, 3)<br/>  }))</pre> | `[]` | no |
 | <a name="input_vpc_config"></a> [vpc\_config](#input\_vpc\_config) | VPC configuration. Required for Redis or internal HTTP sources. | <pre>object({<br/>    subnet_ids         = list(string)<br/>    security_group_ids = list(string)<br/>  })</pre> | `null` | no |
 
 ## Outputs
