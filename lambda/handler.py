@@ -258,6 +258,24 @@ def evaluate(config, source_values, source_errors, current_desired, state, now):
     # where the alarm stays breaching through the cooldown rather than re-arming).
     # The counter resets naturally above whenever a policy stops wanting a direction.
 
+    # --- Bounds enforcement (final override) ---
+    # The live desired count must always sit within [lo, hi]. Correct drift from
+    # manual edits or a tightened config (e.g. a lowered max_replicas) even when
+    # no policy fired. This bypasses cooldowns, breach gating, and source-error
+    # suppression: being out of range is a hard violation, not a metric-driven
+    # decision. Policy-driven candidates are already clamped, so in practice this
+    # only triggers when nothing else moved the count this tick.
+    if new_desired < lo:
+        action = "scale_out"
+        new_desired = lo
+        winning = []
+        reason = f"bounds enforcement: desired {current_desired} below min -> {lo}"
+    elif new_desired > hi:
+        action = "scale_in"
+        new_desired = hi
+        winning = []
+        reason = f"bounds enforcement: desired {current_desired} above max -> {hi}"
+
     new_state = dict(state)
     new_state["breaches"] = new_breaches
     if action == "scale_out":

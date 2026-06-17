@@ -295,3 +295,50 @@ def test_noop_keeps_desired():
     out = ev(c, {"q": 250}, {}, 3, {})  # ceil(250/100)=3 == current
     assert out["action"] == "none"
     assert out["new_desired"] == 3
+
+
+# --- bounds enforcement ----------------------------------------------------
+
+def test_below_min_scales_up_without_policy():
+    # No policies, no metrics — desired below min is still corrected up to min.
+    c = cfg(min_replicas=2, max_replicas=10)
+    out = ev(c, {}, {}, 0, {})
+    assert out["action"] == "scale_out"
+    assert out["new_desired"] == 2
+    assert "bounds" in out["reason"]
+
+
+def test_above_max_scales_down_without_policy():
+    # No policies — desired above max is corrected down to max.
+    c = cfg(min_replicas=0, max_replicas=5)
+    out = ev(c, {}, {}, 20, {})
+    assert out["action"] == "scale_in"
+    assert out["new_desired"] == 5
+    assert "bounds" in out["reason"]
+
+
+def test_within_bounds_no_correction():
+    c = cfg(min_replicas=2, max_replicas=10)
+    out = ev(c, {}, {}, 5, {})
+    assert out["action"] == "none"
+    assert out["new_desired"] == 5
+
+
+def test_bounds_correction_ignores_cooldown():
+    # An out-of-range count is corrected even right after a scale (no cooldown gate).
+    c = cfg(min_replicas=3, max_replicas=10)
+    recent = (NOW - timedelta(seconds=1)).isoformat()
+    out = ev(c, {}, {}, 1, {"last_scale_out": recent, "last_scale_in": recent})
+    assert out["action"] == "scale_out"
+    assert out["new_desired"] == 3
+    assert out["new_state"]["last_scale_out"] == NOW.isoformat()
+
+
+def test_above_max_corrected_despite_source_error():
+    # Scale-in suppression from a source error must not block bounds enforcement.
+    c = cfg(min_replicas=0, max_replicas=5,
+            targets=[{"name": "q", "source": "q", "per": 100}])
+    out = ev(c, {}, {"q": "boom"}, 20, {})
+    assert out["scale_in_suppressed"] is True
+    assert out["action"] == "scale_in"
+    assert out["new_desired"] == 5
