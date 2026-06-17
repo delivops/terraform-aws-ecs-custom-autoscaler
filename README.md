@@ -99,6 +99,7 @@ Every tick, each policy proposes a candidate. They are combined as:
 1. **Scale-out wins, max takes it.** If any eligible policy wants more than the current count, scale out to the **highest** candidate.
 2. **Otherwise, scale in conservatively.** Scale in only to the **highest** level any target or scale-in rule still wants. A target satisfied at the current count (or wanting more) **holds the line** and blocks scale-in. You never starve a hot metric to satisfy an idle one.
 3. Everything is clamped to `[min_replicas, max_replicas]` and rounded up.
+4. **Bounds are always enforced.** Even when no policy fires, if the live desired count is below `min_replicas` it is raised to the minimum, and if above `max_replicas` it is lowered to the maximum. This corrects drift from manual edits or a tightened config and bypasses cooldowns, breach gating, and source-error suppression — being out of range is a hard violation, not a metric-driven decision.
 
 ### Source failure is asymmetric
 
